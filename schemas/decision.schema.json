@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/theme-radar-decision-lab/decision.schema.json",
+  "title": "Immutable Decision Object",
+  "type": "object",
+  "required": [
+    "decision_id",
+    "created_at",
+    "market_asof",
+    "theme",
+    "ticker",
+    "theme_state",
+    "theme_key",
+    "company_state",
+    "tape",
+    "playbooks",
+    "action",
+    "strongest_reason_not_to_trade",
+    "model_version",
+    "config_hash"
+  ],
+  "properties": {
+    "decision_id": {"type": "string", "minLength": 8},
+    "created_at": {"type": "string"},
+    "market_asof": {"type": "string"},
+    "theme": {"type": "string"},
+    "ticker": {"type": "string"},
+    "radar_run_id": {"type": ["string", "null"]},
+    "radar_source_commit": {"type": ["string", "null"]},
+    "world_raw": {"type": ["string", "null"]},
+    "world_calibrated": {"type": ["string", "null"]},
+    "world_confidence": {"type": ["string", "null"]},
+    "theme_state": {"type": "string"},
+    "theme_key": {"type": "boolean"},
+    "dynamic_universe_layer": {"type": ["string", "null"]},
+    "company_state": {"type": "string"},
+    "company_thesis": {"type": ["string", "null"]},
+    "linkage": {
+      "type": "object",
+      "properties": {
+        "control": {"type": ["string", "null"]},
+        "window": {"type": ["integer", "null"]},
+        "correlation": {"type": ["number", "null"]},
+        "beta": {"type": ["number", "null"]},
+        "r2": {"type": ["number", "null"]},
+        "residual_mean": {"type": ["number", "null"]},
+        "residual_vol": {"type": ["number", "null"]},
+        "beta_stability": {"type": ["number", "null"]},
+        "decoupling_score": {"type": ["number", "null"]},
+        "circularity_warning": {"type": ["boolean", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "tape": {
+      "type": "object",
+      "required": ["state", "stage"],
+      "properties": {
+        "state": {"type": "string"},
+        "stage": {"type": "string"},
+        "support": {"type": ["number", "null"]},
+        "reclaim": {"type": ["number", "null"]},
+        "pivot": {"type": ["number", "null"]},
+        "invalidation": {"type": ["number", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "playbooks": {
+      "type": "object",
+      "required": ["scores", "selected", "probability_is_calibrated"],
+      "properties": {
+        "scores": {"type": "object", "additionalProperties": {"type": "number"}},
+        "selected": {"type": "string"},
+        "probability_is_calibrated": {"type": "boolean"},
+        "sample_size": {"type": ["integer", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "action": {
+      "enum": [
+        "BLOCKED",
+        "WATCH_ONLY",
+        "AGGRESSIVE_PROBE",
+        "BUILD_ON_RETEST",
+        "MAINTAIN",
+        "REDUCE_REVIEW"
+      ]
+    },
+    "max_permission": {"type": ["string", "number", "null"]},
+    "entry_condition": {"type": ["string", "null"]},
+    "invalidation": {"type": ["string", "null"]},
+    "strongest_reason_not_to_trade": {"type": "string"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "source_timestamps": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+    "model_version": {"type": "string"},
+    "config_hash": {"type": "string"},
+    "record_hash": {"type": "string"}
+  },
+  "additionalProperties": true
+}
