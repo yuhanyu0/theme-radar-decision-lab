@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/theme-radar-decision-lab/outcome.schema.json",
+  "title": "Forward Outcome Record",
+  "type": "object",
+  "required": ["decision_id", "evaluated_at", "horizons"],
+  "properties": {
+    "decision_id": {"type": "string"},
+    "evaluated_at": {"type": "string"},
+    "benchmark": {"type": ["string", "null"]},
+    "theme_control": {"type": ["string", "null"]},
+    "horizons": {
+      "type": "object",
+      "properties": {
+        "1d": {"$ref": "#/$defs/horizon"},
+        "3d": {"$ref": "#/$defs/horizon"},
+        "5d": {"$ref": "#/$defs/horizon"},
+        "10d": {"$ref": "#/$defs/horizon"},
+        "20d": {"$ref": "#/$defs/horizon"}
+      },
+      "additionalProperties": false
+    },
+    "triggered": {"type": ["boolean", "null"]},
+    "invalidation_hit": {"type": ["boolean", "null"]},
+    "missed_upside": {"type": ["number", "null"]},
+    "notes": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "horizon": {
+      "type": ["object", "null"],
+      "properties": {
+        "return": {"type": ["number", "null"]},
+        "benchmark_return": {"type": ["number", "null"]},
+        "theme_relative_return": {"type": ["number", "null"]},
+        "mfe": {"type": ["number", "null"]},
+        "mae": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}
