@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/theme-radar-decision-lab/evidence.schema.json",
+  "title": "Evidence Record",
+  "type": "object",
+  "required": ["evidence_id", "observed_at", "source_type", "source_ref", "fact_type", "payload"],
+  "properties": {
+    "evidence_id": {"type": "string"},
+    "observed_at": {"type": "string"},
+    "retrieved_at": {"type": ["string", "null"]},
+    "market_asof": {"type": ["string", "null"]},
+    "ticker": {"type": ["string", "null"]},
+    "theme": {"type": ["string", "null"]},
+    "source_type": {
+      "enum": [
+        "market_data",
+        "sec_filing",
+        "company_ir",
+        "official_macro",
+        "industry_primary",
+        "reputable_reporting",
+        "radar_model_output",
+        "derived_feature"
+      ]
+    },
+    "source_ref": {"type": "string"},
+    "source_hash": {"type": ["string", "null"]},
+    "fact_type": {"type": "string"},
+    "payload": {"type": "object"},
+    "is_observed_fact": {"type": "boolean", "default": true},
+    "model_version": {"type": ["string", "null"]},
+    "notes": {"type": ["string", "null"]}
+  },
+  "additionalProperties": true
+}
