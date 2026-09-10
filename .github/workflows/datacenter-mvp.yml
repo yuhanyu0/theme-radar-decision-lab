@@ -1,0 +1,47 @@
+name: DataCenter MVP (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      period:
+        description: yfinance lookback period
+        required: false
+        default: 2y
+      world_confidence:
+        description: Optional external world-confidence input
+        required: false
+        default: unknown
+      theme_key:
+        description: Set true only when independent + model theme gate is satisfied
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e .
+      - name: Run independent market/linkage/Tape MVP
+        shell: bash
+        run: |
+          ARGS=(--period "${{ inputs.period }}" --world-confidence "${{ inputs.world_confidence }}")
+          if [[ "${{ inputs.theme_key }}" == "true" ]]; then
+            ARGS+=(--theme-key)
+          fi
+          python scripts/run_datacenter_mvp.py "${ARGS[@]}"
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: datacenter-mvp-${{ github.run_id }}
+          path: artifacts/*.json
+          if-no-files-found: error
+          retention-days: 14
