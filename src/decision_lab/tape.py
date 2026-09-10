@@ -71,14 +71,15 @@ def assess_tape_state(
 
     The implementation is deliberately conservative. It is intended as a router input,
     not an autonomous trade signal. Explicit externally researched support/reclaim levels
-    can be supplied; otherwise recent swing structure is used.
+    can be supplied; otherwise recent *prior* swing structure is used so the current bar
+    cannot mechanically define the level that it is supposed to reclaim.
     """
-    required = {"Open", "High", "Low", "Close", "Volume"}
-    missing = required.difference(ohlcv.columns)
+    required = ["Open", "High", "Low", "Close", "Volume"]
+    missing = set(required).difference(ohlcv.columns)
     if missing:
         raise ValueError(f"missing OHLCV columns: {sorted(missing)}")
 
-    frame = ohlcv[list(required)].dropna().tail(max(lookback, 25)).copy()
+    frame = ohlcv[required].dropna().tail(max(lookback, 25)).copy()
     if len(frame) < 20:
         raise ValueError("at least 20 valid bars are required")
 
@@ -91,11 +92,8 @@ def assess_tape_state(
         atr = float(close.tail(20).std(ddof=1))
 
     last_close = float(close.iloc[-1])
-    last_low = float(low.iloc[-1])
     rolling_low_20 = low.rolling(20).min()
-    new_low_recently = bool(
-        (low.tail(3) <= rolling_low_20.tail(3) * 1.001).any()
-    )
+    new_low_recently = bool((low.tail(3) <= rolling_low_20.tail(3) * 1.001).any())
 
     ma5 = float(close.rolling(5).mean().iloc[-1])
     ma10 = float(close.rolling(10).mean().iloc[-1])
@@ -126,10 +124,15 @@ def assess_tape_state(
 
     support = float(support_level) if support_level is not None else inferred_support
     if support is None:
-        support = float(low.tail(20).min())
+        support = float(low.iloc[-20:-1].min())
 
-    inferred_pivot = float(high.tail(20).max())
-    reclaim = float(reclaim_level) if reclaim_level is not None else float(close.tail(10).max())
+    # Prior-only levels: exclude the latest bar (and for the retest anchor exclude
+    # the latest two bars) to prevent a circular "reclaim of today's own high".
+    prior_highs = high.iloc[-21:-1] if len(high) >= 21 else high.iloc[:-1]
+    prior_closes_for_reclaim = close.iloc[-12:-2] if len(close) >= 12 else close.iloc[:-2]
+    inferred_pivot = float(prior_highs.max())
+    inferred_reclaim = float(prior_closes_for_reclaim.max())
+    reclaim = float(reclaim_level) if reclaim_level is not None else inferred_reclaim
     pivot = max(reclaim, inferred_pivot)
     invalidation = support - (0.5 * atr if np.isfinite(atr) else 0.0)
 
@@ -158,24 +161,25 @@ def assess_tape_state(
         range20 = float((high.tail(20).max() - low.tail(20).min()) / max(last_close, 1e-12))
         attempted_base = no_new_5d_low and range5 < range20 * 0.55
 
-        reclaimed = last_close > reclaim and close.iloc[-2] <= reclaim
-        held_above_reclaim = bool((close.tail(3) >= reclaim * 0.995).all())
+        crossed_reclaim_now = bool(last_close > reclaim and float(close.iloc[-2]) <= reclaim)
+        had_prior_reclaim = bool((close.iloc[-5:-1] > reclaim).any())
+        held_above_reclaim = bool((close.tail(2) >= reclaim * 0.995).all())
         retest_near_reclaim = bool(
-            low.tail(3).min() <= reclaim + 0.35 * atr
-            and low.tail(3).min() >= reclaim - 0.50 * atr
+            float(low.tail(2).min()) <= reclaim + 0.35 * atr
+            and float(low.tail(2).min()) >= reclaim - 0.50 * atr
         )
         breakout = bool(last_close > inferred_pivot and volume_confirmation)
         extended = bool(last_close > ma20 + 2.5 * atr)
         squeeze = bool(volatility_contraction and range5 < range20 * 0.40)
 
-        if held_above_reclaim and retest_near_reclaim and higher_low:
+        if had_prior_reclaim and held_above_reclaim and retest_near_reclaim and higher_low:
             state = "clean_retest"
             stage = "B3"
-            reasons.extend(["reclaim held on retest", "higher low present"])
-        elif reclaimed and higher_low:
+            reasons.extend(["prior reclaim held on retest", "higher low present"])
+        elif crossed_reclaim_now and higher_low:
             state = "reclaim"
             stage = "B2"
-            reasons.extend(["key level reclaimed", "higher low present"])
+            reasons.extend(["prior key level reclaimed", "higher low present"])
         elif higher_low:
             state = "higher_low"
             stage = "B2"
@@ -187,7 +191,7 @@ def assess_tape_state(
         elif breakout:
             state = "breakout"
             stage = "A1"
-            reasons.append("range breakout with volume confirmation")
+            reasons.append("prior-range breakout with volume confirmation")
         elif squeeze:
             state = "squeeze"
             stage = "D1"
