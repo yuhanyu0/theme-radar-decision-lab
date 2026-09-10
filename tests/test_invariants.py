@@ -6,6 +6,7 @@ import pytest
 
 from decision_lab.ledger import verify_record, write_immutable_json
 from decision_lab.linkage import leave_one_out_control, rolling_linkage
+from decision_lab.outcomes import evaluate_forward_outcomes, missed_upside
 from decision_lab.playbooks import route_playbooks
 
 
@@ -66,3 +67,20 @@ def test_ledger_is_append_only(tmp_path):
 
     parsed = json.loads(path.read_text())
     assert parsed["decision_id"] == "d-001"
+
+
+def test_forward_outcomes_and_missed_upside_are_separate_from_decision():
+    idx = pd.date_range("2026-01-01", periods=30, freq="B")
+    close = pd.Series(np.linspace(100.0, 130.0, len(idx)), index=idx)
+    bench = pd.Series(np.linspace(100.0, 110.0, len(idx)), index=idx)
+    outcomes = evaluate_forward_outcomes(
+        close=close,
+        decision_asof=idx[4],
+        benchmark_close=bench,
+        horizons=(1, 3, 5, 10, 20),
+    )
+    assert outcomes["5d"] is not None
+    assert outcomes["5d"]["return"] > outcomes["5d"]["benchmark_return"]
+    missed = missed_upside(action="WATCH_ONLY", horizons=outcomes, reference_horizon="20d")
+    assert missed is not None and missed > 0
+    assert missed_upside(action="BUILD_ON_RETEST", horizons=outcomes) == 0.0
