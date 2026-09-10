@@ -1,0 +1,42 @@
+theme: DataCenter_Infra
+version: "0.1-public-seed"
+
+# Public research seed only. Membership is not an investment recommendation and
+# must be independently revalidated from primary evidence before promotion.
+layers:
+  - name: power_time_to_power
+    description: On-site generation, merchant/contracted generation, time-to-power solutions.
+  - name: grid_interconnection
+    description: Grid equipment, generation/grid interface, transmission/interconnection bottlenecks.
+  - name: electrical_switchgear
+    description: Power distribution, switchgear, protection, UPS and electrical balance-of-plant.
+  - name: thermal_liquid_cooling
+    description: HVAC, thermal management and direct/indirect liquid cooling.
+  - name: epc_mep
+    description: Engineering, procurement, construction and MEP delivery.
+  - name: network_interconnect_optics
+    description: High-speed networking, copper/optical interconnect and connectivity.
+  - name: datacenter_ownership
+    description: Data-center ownership/operation and colocation real estate.
+
+candidates:
+  - {ticker: BE, theme: DataCenter_Infra, layer: power_time_to_power, membership_state: discovery, expression_role: high_beta_satellite}
+  - {ticker: NRG, theme: DataCenter_Infra, layer: power_time_to_power, membership_state: discovery, expression_role: second_order_beneficiary}
+  - {ticker: CEG, theme: DataCenter_Infra, layer: power_time_to_power, membership_state: discovery, expression_role: second_order_beneficiary}
+  - {ticker: TLN, theme: DataCenter_Infra, layer: power_time_to_power, membership_state: discovery, expression_role: high_beta_satellite}
+  - {ticker: GEV, theme: DataCenter_Infra, layer: grid_interconnection, membership_state: discovery, expression_role: quality_alpha}
+  - {ticker: ETN, theme: DataCenter_Infra, layer: electrical_switchgear, membership_state: discovery, expression_role: quality_alpha}
+  - {ticker: POWL, theme: DataCenter_Infra, layer: electrical_switchgear, membership_state: discovery, expression_role: high_beta_satellite}
+  - {ticker: NVT, theme: DataCenter_Infra, layer: electrical_switchgear, membership_state: discovery, expression_role: quality_alpha}
+  - {ticker: VRT, theme: DataCenter_Infra, layer: thermal_liquid_cooling, membership_state: discovery, expression_role: quality_alpha}
+  - {ticker: AAON, theme: DataCenter_Infra, layer: thermal_liquid_cooling, membership_state: discovery, expression_role: high_beta_satellite}
+  - {ticker: MOD, theme: DataCenter_Infra, layer: thermal_liquid_cooling, membership_state: discovery, expression_role: high_beta_satellite}
+  - {ticker: EME, theme: DataCenter_Infra, layer: epc_mep, membership_state: discovery, expression_role: quality_alpha}
+  - {ticker: FIX, theme: DataCenter_Infra, layer: epc_mep, membership_state: discovery, expression_role: high_beta_satellite}
+  - {ticker: PWR, theme: DataCenter_Infra, layer: epc_mep, membership_state: discovery, expression_role: quality_alpha}
+  - {ticker: APH, theme: DataCenter_Infra, layer: network_interconnect_optics, membership_state: discovery, expression_role: quality_alpha}
+  - {ticker: ANET, theme: DataCenter_Infra, layer: network_interconnect_optics, membership_state: discovery, expression_role: quality_alpha}
+  - {ticker: CRDO, theme: DataCenter_Infra, layer: network_interconnect_optics, membership_state: discovery, expression_role: high_beta_satellite}
+  - {ticker: ALAB, theme: DataCenter_Infra, layer: network_interconnect_optics, membership_state: discovery, expression_role: high_beta_satellite}
+  - {ticker: EQIX, theme: DataCenter_Infra, layer: datacenter_ownership, membership_state: discovery, expression_role: beta_proxy}
+  - {ticker: DLR, theme: DataCenter_Infra, layer: datacenter_ownership, membership_state: discovery, expression_role: beta_proxy}
