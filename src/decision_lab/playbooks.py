@@ -45,6 +45,11 @@ def route_playbooks(
 
     Scores are *match scores*, not calibrated probabilities. Calibration should only be
     enabled after enough immutable live decisions exist for reliability/Brier analysis.
+
+    Action labels follow the dual-key policy: a failed/falling Tape can be BLOCKED,
+    but a valid Tape path with the Theme key still off is WATCH_ONLY even when
+    NoTrade has the largest match score. This preserves the distinction between
+    "the setup is invalid" and "the setup is not yet permitted." 
     """
     scores = {k: 0.0 for k in PLAYBOOKS}
     reasons: list[str] = []
@@ -122,10 +127,15 @@ def route_playbooks(
     normalized = _normalize(scores)
     selected = max(normalized, key=normalized.get)
 
-    if tape_state in {"falling_knife", "failed_rebound"} or selected == "NoTrade":
+    tape_blocked = tape_state in {"falling_knife", "failed_rebound"} or tape_stage == "B0"
+    if tape_blocked:
         action = "BLOCKED"
     elif not theme_key:
+        # One key only: preserve as a research/watch state rather than conflating
+        # missing Theme permission with a failed Tape setup.
         action = "WATCH_ONLY"
+    elif selected == "NoTrade":
+        action = "BLOCKED"
     elif tape_stage == "B3" and normalized.get("B", 0.0) >= normalized.get("NoTrade", 0.0):
         action = "BUILD_ON_RETEST"
     elif tape_stage == "B2" and normalized.get("B", 0.0) >= normalized.get("NoTrade", 0.0):
