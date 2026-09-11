@@ -45,6 +45,18 @@ def test_c_play_does_not_execute_a_falling_knife():
     assert routed.selected_playbook == "NoTrade"
 
 
+def test_missing_theme_key_with_valid_b2_is_watch_only_not_blocked():
+    routed = route_playbooks(
+        theme_key=False,
+        tape_state="reclaim",
+        tape_stage="B2",
+        fundamentals_intact=True,
+        world_confidence="low",
+    )
+    assert routed.selected_playbook == "NoTrade"
+    assert routed.action == "WATCH_ONLY"
+
+
 def test_clean_retest_can_route_to_build_when_theme_key_is_on():
     routed = route_playbooks(
         theme_key=True,
