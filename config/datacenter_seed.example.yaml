@@ -1,5 +1,5 @@
 theme: DataCenter_Infra
-version: "0.1-public-seed"
+version: "0.2-public-seed"
 
 # Public research seed only. Membership is not an investment recommendation and
 # must be independently revalidated from primary evidence before promotion.
@@ -10,12 +10,16 @@ layers:
     description: Grid equipment, generation/grid interface, transmission/interconnection bottlenecks.
   - name: electrical_switchgear
     description: Power distribution, switchgear, protection, UPS and electrical balance-of-plant.
+  - name: power_conversion_800vdc
+    description: Medium-voltage to rack-level DC conversion, solid-state transformers and emerging 800 VDC AI rack power architecture.
   - name: thermal_liquid_cooling
     description: HVAC, thermal management and direct/indirect liquid cooling.
   - name: epc_mep
     description: Engineering, procurement, construction and MEP delivery.
   - name: network_interconnect_optics
     description: High-speed networking, copper/optical interconnect and connectivity.
+  - name: compute_support_hardware
+    description: Custom data-center compute silicon and adjacent hardware platforms with direct hyperscaler deployment exposure.
   - name: datacenter_ownership
     description: Data-center ownership/operation and colocation real estate.
 
@@ -28,6 +32,16 @@ candidates:
   - {ticker: ETN, theme: DataCenter_Infra, layer: electrical_switchgear, membership_state: discovery, expression_role: quality_alpha}
   - {ticker: POWL, theme: DataCenter_Infra, layer: electrical_switchgear, membership_state: discovery, expression_role: high_beta_satellite}
   - {ticker: NVT, theme: DataCenter_Infra, layer: electrical_switchgear, membership_state: discovery, expression_role: quality_alpha}
+  - ticker: ENPH
+    theme: DataCenter_Infra
+    layer: power_conversion_800vdc
+    membership_state: discovery
+    expression_role: unclassified
+    effective_from: "2026-09-08"
+    provenance:
+      - "https://investor.enphase.com/news-releases/news-release-details/enphase-advances-iq-solid-state-transformer-development-ai-data"
+      - "https://investor.enphase.com/news-releases/news-release-details/enphase-energy-announces-development-iq-solid-state-transformer"
+    notes: "IQ SST is purpose-built for AI data centers; full-system demos expected Nov 2026, customer pilots 2027, volume shipments expected 2028. Economic exposure is prospective and should not yet be treated as a validated revenue proxy."
   - {ticker: VRT, theme: DataCenter_Infra, layer: thermal_liquid_cooling, membership_state: discovery, expression_role: quality_alpha}
   - {ticker: AAON, theme: DataCenter_Infra, layer: thermal_liquid_cooling, membership_state: discovery, expression_role: high_beta_satellite}
   - {ticker: MOD, theme: DataCenter_Infra, layer: thermal_liquid_cooling, membership_state: discovery, expression_role: high_beta_satellite}
@@ -38,5 +52,14 @@ candidates:
   - {ticker: ANET, theme: DataCenter_Infra, layer: network_interconnect_optics, membership_state: discovery, expression_role: quality_alpha}
   - {ticker: CRDO, theme: DataCenter_Infra, layer: network_interconnect_optics, membership_state: discovery, expression_role: high_beta_satellite}
   - {ticker: ALAB, theme: DataCenter_Infra, layer: network_interconnect_optics, membership_state: discovery, expression_role: high_beta_satellite}
+  - ticker: QCOM
+    theme: DataCenter_Infra
+    layer: compute_support_hardware
+    membership_state: provisional
+    expression_role: unclassified
+    effective_from: "2026-09-08"
+    provenance:
+      - "https://www.reuters.com/technology/qualcomm-amazon-develop-custom-chips-ai-data-centers-2026-09-08/"
+    notes: "Multi-generation AWS custom AI data-center silicon and optical-connectivity agreement materially strengthens direct economic exposure. Linkage classification remains unvalidated."
   - {ticker: EQIX, theme: DataCenter_Infra, layer: datacenter_ownership, membership_state: discovery, expression_role: beta_proxy}
   - {ticker: DLR, theme: DataCenter_Infra, layer: datacenter_ownership, membership_state: discovery, expression_role: beta_proxy}
