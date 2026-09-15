@@ -55,11 +55,13 @@ candidates:
   - ticker: QCOM
     theme: DataCenter_Infra
     layer: compute_support_hardware
-    membership_state: provisional
+    membership_state: validated
     expression_role: unclassified
     effective_from: "2026-09-08"
     provenance:
+      - "https://investor.qualcomm.com/news-events/press-releases/news-details/2026/Qualcomm-Announces-Multi-Generational-Product-Collaboration-with-Amazon-to-Build-Next-Generation-AI-Data-Center-Infrastructure/default.aspx"
+      - "https://www.qualcomm.com/news/releases/2026/06/qualcomm-unveils-comprehensive-data-center-roadmap-for-the-agent"
       - "https://www.reuters.com/technology/qualcomm-amazon-develop-custom-chips-ai-data-centers-2026-09-08/"
-    notes: "Multi-generation AWS custom AI data-center silicon and optical-connectivity agreement materially strengthens direct economic exposure. Linkage classification remains unvalidated."
+    notes: "Direct DataCenter economic exposure is validated by Qualcomm primary sources: multi-generation AWS customized silicon and up-to-1.6T optical connectivity, plus the Dragonfly CPU/accelerator/connectivity roadmap and multi-generation hyperscaler agreements. Market linkage classification remains unvalidated and this membership state is not execution permission."
   - {ticker: EQIX, theme: DataCenter_Infra, layer: datacenter_ownership, membership_state: discovery, expression_role: beta_proxy}
   - {ticker: DLR, theme: DataCenter_Infra, layer: datacenter_ownership, membership_state: discovery, expression_role: beta_proxy}
