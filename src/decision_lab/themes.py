@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Literal
+
+import yaml
+
+from .universe import ThemeUniverse
 
 
 class ThemeLifecycleState(str, Enum):
@@ -138,3 +143,57 @@ class ThemeRegistry:
         if not valid:
             raise KeyError(f"no theme version active at {as_of}: {identifier}")
         return valid[-1]
+
+
+@dataclass(frozen=True)
+class ThemePackage:
+    definition: ThemeDefinition
+    universe: ThemeUniverse
+    theme_key_policy: ThemeKeyPolicy
+    evidence_adapter: str
+    version: str
+    source_path: str
+
+
+def _as_tuple(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item) for item in value)
+    raise TypeError("expected a list/tuple")
+
+
+def load_theme_package(path: str | Path) -> ThemePackage:
+    package_path = Path(path)
+    payload = yaml.safe_load(package_path.read_text())
+    theme_payload = dict(payload["theme"])
+    theme_payload["aliases"] = _as_tuple(theme_payload.get("aliases"))
+    theme_payload["child_theme_ids"] = _as_tuple(theme_payload.get("child_theme_ids"))
+    theme_payload["benchmark_stack"] = _as_tuple(theme_payload.get("benchmark_stack"))
+    theme_payload["provenance"] = _as_tuple(theme_payload.get("provenance"))
+    theme_payload["lifecycle_state"] = ThemeLifecycleState(
+        theme_payload.get("lifecycle_state", "discovery")
+    )
+    definition = ThemeDefinition(**theme_payload)
+    definition.validate()
+
+    universe_path = (package_path.parent / payload["universe_source"]).resolve()
+    universe_payload = yaml.safe_load(universe_path.read_text())
+    universe = ThemeUniverse.from_records(
+        theme=universe_payload["theme"],
+        layers=universe_payload["layers"],
+        candidates=universe_payload["candidates"],
+        version=universe_payload.get("version", "0.1"),
+    )
+    if universe.theme != definition.theme_id:
+        raise ValueError("theme package definition and universe source disagree")
+
+    policy = ThemeKeyPolicy(**payload.get("theme_key_policy", {}))
+    return ThemePackage(
+        definition=definition,
+        universe=universe,
+        theme_key_policy=policy,
+        evidence_adapter=str(payload.get("evidence_adapter", "generic")),
+        version=str(payload.get("version", "1")),
+        source_path=str(package_path),
+    )
