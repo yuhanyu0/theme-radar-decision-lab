@@ -46,7 +46,7 @@ def _effective_member_series(
     if not has_effective_window and candidate.membership_state != "retired":
         return series.rename(symbol)
     if not isinstance(returns.index, pd.DatetimeIndex):
-        raise ValueError("effective-dated controls require a DatetimeIndex")
+        raise TypeError("effective-dated controls require a DatetimeIndex")
 
     mask = pd.Series(True, index=returns.index)
     if candidate.effective_from is not None:
