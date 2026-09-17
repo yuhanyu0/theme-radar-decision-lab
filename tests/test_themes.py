@@ -32,6 +32,39 @@ def test_registry_resolves_alias_and_preserves_historical_versions():
     assert registry.latest("Grid").lifecycle_state is ThemeLifecycleState.STRENGTHENING
 
 
+def test_alias_collision_registration_is_atomic():
+    registry = ThemeRegistry()
+    registry.register(
+        ThemeDefinition(
+            theme_id="Theme_A",
+            display_name="Theme A",
+            aliases=("Shared",),
+            version="1",
+        )
+    )
+    conflicting = ThemeDefinition(
+        theme_id="Theme_B",
+        display_name="Theme B",
+        aliases=("Shared",),
+        version="1",
+    )
+
+    try:
+        registry.register(conflicting)
+    except ValueError as exc:
+        assert "alias collision" in str(exc).lower()
+    else:
+        raise AssertionError("alias collision must be rejected")
+
+    assert registry.latest("Shared").theme_id == "Theme_A"
+    try:
+        registry.latest("Theme_B")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("failed registration must not partially mutate registry")
+
+
 def test_parent_child_relationships_reject_self_parent():
     definition = ThemeDefinition(
         theme_id="Defense_Autonomy",
