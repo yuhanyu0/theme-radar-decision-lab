@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Iterable
+from datetime import UTC, datetime
 
 VALID_CANDIDATE_STATES = {
     "discovery",
@@ -48,6 +48,22 @@ class Candidate:
         }.items():
             if value is not None and not (0.0 <= value <= 1.0):
                 raise ValueError(f"{name} must be within [0, 1]")
+        if self.effective_from and self.effective_to and self.effective_to <= self.effective_from:
+            raise ValueError("effective_to must be after effective_from")
+
+    def is_effective(self, as_of: str | None = None) -> bool:
+        """Return whether the candidate belongs to the universe at `as_of`.
+
+        No `as_of` preserves the legacy/current-universe behavior. Effective windows
+        are half-open: `effective_from <= as_of < effective_to`.
+        """
+        if as_of is None:
+            return self.membership_state != "retired"
+        if self.effective_from is not None and as_of < self.effective_from:
+            return False
+        if self.effective_to is not None and as_of >= self.effective_to:
+            return False
+        return not (self.membership_state == "retired" and self.effective_to is None)
 
 
 @dataclass(frozen=True)
@@ -62,7 +78,9 @@ class ThemeUniverse:
     layers: dict[str, ThemeLayer] = field(default_factory=dict)
     candidates: dict[str, Candidate] = field(default_factory=dict)
     version: str = "0.1"
-    generated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    generated_at: str = field(
+        default_factory=lambda: datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    )
 
     def add_layer(self, layer: ThemeLayer) -> None:
         self.layers[layer.name] = layer
@@ -77,18 +95,18 @@ class ThemeUniverse:
             raise ValueError(f"unknown theme layer: {candidate.layer}")
         self.candidates[candidate.ticker.upper()] = candidate
 
-    def active_candidates(self) -> list[Candidate]:
+    def active_candidates(self, *, as_of: str | None = None) -> list[Candidate]:
         return [
             candidate
             for candidate in self.candidates.values()
-            if candidate.membership_state != "retired"
+            if candidate.is_effective(as_of)
         ]
 
-    def by_layer(self, layer: str) -> list[Candidate]:
-        return [c for c in self.active_candidates() if c.layer == layer]
+    def by_layer(self, layer: str, *, as_of: str | None = None) -> list[Candidate]:
+        return [c for c in self.active_candidates(as_of=as_of) if c.layer == layer]
 
-    def symbols(self) -> list[str]:
-        return sorted(c.ticker.upper() for c in self.active_candidates())
+    def symbols(self, *, as_of: str | None = None) -> list[str]:
+        return sorted(c.ticker.upper() for c in self.active_candidates(as_of=as_of))
 
     @classmethod
     def from_records(
@@ -98,7 +116,7 @@ class ThemeUniverse:
         candidates: Iterable[dict],
         *,
         version: str = "0.1",
-    ) -> "ThemeUniverse":
+    ) -> ThemeUniverse:
         universe = cls(theme=theme, version=version)
         for item in layers:
             universe.add_layer(ThemeLayer(**item))

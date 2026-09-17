@@ -1,0 +1,8 @@
+version: "1.0"
+minimum_flow: null
+probe_structure: null
+full_structure: null
+structure_percentile_min: null
+minimum_valid_sessions: 1
+minimum_carry: null
+max_raw_calibrated_gap: null

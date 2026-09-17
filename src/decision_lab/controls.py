@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from .universe import ThemeUniverse
+from .universe import Candidate, ThemeUniverse
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,41 @@ def _equal_weight(frame: pd.DataFrame, name: str) -> pd.Series:
     return frame.mean(axis=1, skipna=True).rename(name)
 
 
+def _align_effective_timestamp(value: str, index: pd.DatetimeIndex) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if index.tz is None and timestamp.tz is not None:
+        return timestamp.tz_convert("UTC").tz_localize(None)
+    if index.tz is not None and timestamp.tz is None:
+        return timestamp.tz_localize(index.tz)
+    if index.tz is not None and timestamp.tz is not None:
+        return timestamp.tz_convert(index.tz)
+    return timestamp
+
+
+def _effective_member_series(
+    returns: pd.DataFrame,
+    candidate: Candidate,
+) -> pd.Series:
+    symbol = candidate.ticker.upper()
+    series = returns[symbol].copy()
+    has_effective_window = candidate.effective_from is not None or candidate.effective_to is not None
+    if not has_effective_window and candidate.membership_state != "retired":
+        return series.rename(symbol)
+    if not isinstance(returns.index, pd.DatetimeIndex):
+        raise TypeError("effective-dated controls require a DatetimeIndex")
+
+    mask = pd.Series(True, index=returns.index)
+    if candidate.effective_from is not None:
+        start = _align_effective_timestamp(candidate.effective_from, returns.index)
+        mask &= returns.index >= start
+    if candidate.effective_to is not None:
+        end = _align_effective_timestamp(candidate.effective_to, returns.index)
+        mask &= returns.index < end
+    elif candidate.membership_state == "retired":
+        mask &= False
+    return series.where(mask).rename(symbol)
+
+
 def build_layered_leave_one_out_controls(
     returns: pd.DataFrame,
     universe: ThemeUniverse,
@@ -32,12 +67,13 @@ def build_layered_leave_one_out_controls(
     *,
     min_members_per_layer: int = 2,
 ) -> ThemeControls:
-    """Build subtheme and layer-equal composite controls, excluding `target` everywhere.
+    """Build target-excluded, effective-dated layer-equal theme controls.
 
-    The composite gives each *layer* equal influence, then equal-weights surviving
-    members inside a layer. This prevents a large/high-beta layer from mechanically
-    defining the whole theme. Layers with fewer than `min_members_per_layer`
-    surviving members are excluded from the composite and surfaced as warnings.
+    Each layer receives equal influence after equal-weighting members that were actually
+    effective on each observation date. Future members are masked before `effective_from`
+    and retired members with an explicit `effective_to` disappear from that date forward.
+    This prevents current universe membership from leaking backward into historical
+    linkage windows. The target is excluded everywhere.
     """
     target = target.upper()
     if target not in universe.candidates:
@@ -49,25 +85,46 @@ def build_layered_leave_one_out_controls(
     warnings: list[str] = []
 
     for layer in universe.layers:
-        members = [
-            c.ticker.upper()
-            for c in universe.by_layer(layer)
-            if c.ticker.upper() != target and c.ticker.upper() in available_columns
+        candidates = [
+            candidate
+            for candidate in universe.candidates.values()
+            if candidate.layer == layer
+            and candidate.ticker.upper() != target
+            and candidate.ticker.upper() in available_columns
         ]
-        if len(members) < min_members_per_layer:
+        if len(candidates) < min_members_per_layer:
             warnings.append(
-                f"layer {layer} excluded: only {len(members)} non-target members available"
+                f"layer {layer} excluded: only {len(candidates)} non-target members available"
             )
             continue
+
+        member_frame = pd.concat(
+            [_effective_member_series(returns, candidate) for candidate in candidates],
+            axis=1,
+        )
+        valid_members = member_frame.notna().sum(axis=1)
         name = f"{universe.theme}:{layer}:minus_{target}"
-        layer_series[layer] = _equal_weight(returns[members], name)
+        control = _equal_weight(member_frame, name).where(
+            valid_members >= min_members_per_layer
+        )
+        if not control.notna().any():
+            warnings.append(
+                f"layer {layer} excluded: no dates have {min_members_per_layer} effective members"
+            )
+            continue
+        if control.isna().any():
+            warnings.append(
+                f"layer {layer} has dates with insufficient effective non-target members"
+            )
+        layer_series[layer] = control
 
     if len(layer_series) < 2:
         raise ValueError("composite control requires at least two valid non-target layers")
 
     composite_frame = pd.concat(layer_series.values(), axis=1)
+    valid_layers = composite_frame.notna().sum(axis=1)
     composite_name = f"{universe.theme}:layer_equal_composite:minus_{target}"
-    composite = _equal_weight(composite_frame, composite_name)
+    composite = _equal_weight(composite_frame, composite_name).where(valid_layers >= 2)
 
     if layer_name in layer_series:
         layer_control_name = layer_series[layer_name].name

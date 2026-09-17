@@ -19,9 +19,11 @@ Pipeline:
 5. **Observed facts, model inference, and action are separate fields.**
 6. **No automatic brokerage execution.** This is a research and evaluation system.
 
-## MVP scope
+## Market-wide architecture
 
-The first pilot is `DataCenter_Infra`, because it requires a dynamic value-chain universe rather than a fixed expression list. The engine is designed to support layers such as power/time-to-power, grid/interconnection, electrical/switchgear, thermal/liquid cooling, EPC/MEP, networking/interconnect/optics, compute-support hardware, and data-center ownership.
+`DataCenter_Infra` remains the first validated theme package, but the core engine is theme-agnostic. A `ThemeRegistry` manages theme lifecycle/versioning, each `ThemePackage` carries its own universe and Theme-key policy, company facts are normalized through evidence adapters, and hierarchical linkage separates broad-market/sector/industry movement from target-excluded theme linkage.
+
+The current implementation increment intentionally does not add a global scanner or a second live theme yet. Its acceptance test is stricter: DataCenter must load through the generic package interface without semantic drift, while existing Tape, A-H routing, ledger, and outcome behavior stays unchanged.
 
 ## Repository layout
 

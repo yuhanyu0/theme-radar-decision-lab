@@ -5,7 +5,6 @@ from decision_lab.controls import build_layered_leave_one_out_controls
 from decision_lab.radar import parse_radar_daily_markdown
 from decision_lab.universe import ThemeUniverse
 
-
 RADAR_SAMPLE = """# Theme Radar Daily Brief — 2026-09-10
 
 ## Leaders (v1) — W=63
@@ -91,3 +90,45 @@ def test_layer_equal_composite_excludes_target_everywhere():
         expected_composite.rename("T:layer_equal_composite:minus_A"),
     )
     assert "minus_A" in controls.composite_control_name
+
+
+def test_historical_controls_mask_candidates_outside_effective_window():
+    idx = pd.date_range("2026-01-01", periods=6, freq="B")
+    returns = pd.DataFrame(
+        {
+            "A": [0.00] * 6,
+            "B": [0.90] * 6,
+            "C": [0.10] * 6,
+            "G": [0.30] * 6,
+            "D": [0.20] * 6,
+            "E": [0.40] * 6,
+            "F": [0.60] * 6,
+        },
+        index=idx,
+    )
+    effective_from = idx[3].date().isoformat()
+    universe = ThemeUniverse.from_records(
+        theme="T",
+        layers=[{"name": "L1"}, {"name": "L2"}],
+        candidates=[
+            {"ticker": "A", "theme": "T", "layer": "L1"},
+            {"ticker": "B", "theme": "T", "layer": "L1", "effective_from": effective_from},
+            {"ticker": "C", "theme": "T", "layer": "L1"},
+            {"ticker": "G", "theme": "T", "layer": "L1"},
+            {"ticker": "D", "theme": "T", "layer": "L2"},
+            {"ticker": "E", "theme": "T", "layer": "L2"},
+            {"ticker": "F", "theme": "T", "layer": "L2"},
+        ],
+    )
+
+    controls = build_layered_leave_one_out_controls(returns, universe, "A")
+    stable_l2 = returns[["D", "E", "F"]].mean(axis=1)
+    expected_l1 = pd.Series(index=idx, dtype=float)
+    expected_l1.loc[idx[:3]] = returns.loc[idx[:3], ["C", "G"]].mean(axis=1)
+    expected_l1.loc[idx[3:]] = returns.loc[idx[3:], ["B", "C", "G"]].mean(axis=1)
+    expected = pd.concat([expected_l1, stable_l2], axis=1).mean(axis=1)
+
+    pd.testing.assert_series_equal(
+        controls.composite_control,
+        expected.rename("T:layer_equal_composite:minus_A"),
+    )
