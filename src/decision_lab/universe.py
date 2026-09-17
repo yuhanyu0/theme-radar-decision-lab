@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 VALID_CANDIDATE_STATES = {
     "discovery",
@@ -63,9 +63,7 @@ class Candidate:
             return False
         if self.effective_to is not None and as_of >= self.effective_to:
             return False
-        if self.membership_state == "retired" and self.effective_to is None:
-            return False
-        return True
+        return not (self.membership_state == "retired" and self.effective_to is None)
 
 
 @dataclass(frozen=True)
@@ -81,7 +79,7 @@ class ThemeUniverse:
     candidates: dict[str, Candidate] = field(default_factory=dict)
     version: str = "0.1"
     generated_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        default_factory=lambda: datetime.now(UTC).isoformat().replace("+00:00", "Z")
     )
 
     def add_layer(self, layer: ThemeLayer) -> None:
@@ -118,7 +116,7 @@ class ThemeUniverse:
         candidates: Iterable[dict],
         *,
         version: str = "0.1",
-    ) -> "ThemeUniverse":
+    ) -> ThemeUniverse:
         universe = cls(theme=theme, version=version)
         for item in layers:
             universe.add_layer(ThemeLayer(**item))
