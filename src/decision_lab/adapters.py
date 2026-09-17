@@ -6,7 +6,6 @@ from typing import Protocol
 
 import numpy as np
 
-
 RawFactValue = float | int | str | None
 
 
