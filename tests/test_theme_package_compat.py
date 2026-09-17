@@ -5,7 +5,6 @@ import yaml
 from decision_lab.themes import load_theme_package
 from decision_lab.universe import ThemeUniverse
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
