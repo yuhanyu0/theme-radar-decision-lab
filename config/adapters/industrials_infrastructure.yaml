@@ -1,0 +1,13 @@
+version: "1.0"
+adapter: industrials_infrastructure
+expected_raw_fields:
+  - revenue_growth
+  - gross_margin
+  - backlog_growth
+  - order_growth
+  - capex_to_sales
+  - fcf_margin
+  - net_debt_to_ebitda
+  - top_customer_share
+  - guidance_revision
+notes: "Normalized scores are routing/research features, not replacements for primary-source raw facts."
