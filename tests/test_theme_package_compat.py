@@ -53,3 +53,12 @@ def test_new_market_wide_interfaces_are_publicly_importable():
     assert decision_lab.IndustrialsInfrastructureAdapter is not None
     assert decision_lab.HierarchicalControlSpec is not None
     assert decision_lab.hierarchical_linkage is not None
+
+
+def test_core_engine_has_no_datacenter_literal_dependency():
+    hits = []
+    for path in (ROOT / "src/decision_lab").glob("*.py"):
+        text = path.read_text()
+        if "DataCenter_Infra" in text or "datacenter_seed" in text:
+            hits.append(path.name)
+    assert hits == []
