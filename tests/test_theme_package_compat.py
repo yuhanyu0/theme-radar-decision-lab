@@ -41,3 +41,15 @@ def test_candidate_effective_time_survives_package_loading():
     package = load_theme_package(ROOT / "config/themes/datacenter_infra.yaml")
     assert package.universe.candidates["QCOM"].effective_from == "2026-09-08"
     assert package.universe.candidates["ENPH"].effective_from == "2026-09-08"
+
+
+def test_new_market_wide_interfaces_are_publicly_importable():
+    import decision_lab
+
+    assert decision_lab.ThemeRegistry is not None
+    assert decision_lab.ThemePackage is not None
+    assert decision_lab.ThemeKeyPolicy is not None
+    assert decision_lab.GenericEvidenceAdapter is not None
+    assert decision_lab.IndustrialsInfrastructureAdapter is not None
+    assert decision_lab.HierarchicalControlSpec is not None
+    assert decision_lab.hierarchical_linkage is not None
