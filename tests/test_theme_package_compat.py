@@ -42,6 +42,18 @@ def test_candidate_effective_time_survives_package_loading():
     assert package.universe.candidates["ENPH"].effective_from == "2026-09-08"
 
 
+def test_effective_dated_symbols_do_not_retroactively_include_new_candidates():
+    package = load_theme_package(ROOT / "config/themes/datacenter_infra.yaml")
+
+    before = package.universe.symbols(as_of="2026-09-07")
+    effective = package.universe.symbols(as_of="2026-09-08")
+
+    assert "QCOM" not in before
+    assert "ENPH" not in before
+    assert "QCOM" in effective
+    assert "ENPH" in effective
+
+
 def test_new_market_wide_interfaces_are_publicly_importable():
     import decision_lab
 
