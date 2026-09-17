@@ -1,0 +1,23 @@
+version: "1.0"
+
+theme:
+  theme_id: DataCenter_Infra
+  display_name: Data Center Infrastructure
+  aliases: [DataCenter, DC_Infra]
+  lifecycle_state: strengthening
+  discovered_at: "2026-09-01"
+  effective_from: "2026-09-01"
+  thesis_summary: "AI/data-center buildout creates cross-industry demand across power, grid, thermal, construction, networking, compute support and ownership."
+  economic_chain_description: "Power/time-to-power -> grid/interconnection -> electrical/conversion -> thermal -> EPC/MEP -> networking/optics -> compute support -> ownership."
+  benchmark_stack: [SPY, XLK, XLI, XLU]
+  provenance: ["config/datacenter_seed.example.yaml"]
+  version: "1"
+
+universe_source: ../datacenter_seed.example.yaml
+evidence_adapter: industrials_infrastructure
+
+theme_key_policy:
+  minimum_flow: 0.50
+  probe_structure: 0.08
+  full_structure: 0.35
+  minimum_valid_sessions: 2
