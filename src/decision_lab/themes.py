@@ -109,17 +109,21 @@ class ThemeRegistry:
     def register(self, definition: ThemeDefinition) -> None:
         definition.validate()
         key = definition.theme_id
-        versions = self._versions.setdefault(key, [])
+        versions = self._versions.get(key, [])
         if any(item.version == definition.version for item in versions):
             raise ValueError(f"duplicate theme version: {key}@{definition.version}")
+
+        identifiers = (key, *definition.aliases)
+        for identifier in identifiers:
+            existing = self._aliases.get(identifier.lower())
+            if existing is not None and existing != key:
+                raise ValueError(f"alias collision: {identifier}")
+
+        versions = self._versions.setdefault(key, [])
         versions.append(definition)
         versions.sort(key=lambda item: item.effective_from or "")
-        self._aliases[key.lower()] = key
-        for alias in definition.aliases:
-            existing = self._aliases.get(alias.lower())
-            if existing is not None and existing != key:
-                raise ValueError(f"alias collision: {alias}")
-            self._aliases[alias.lower()] = key
+        for identifier in identifiers:
+            self._aliases[identifier.lower()] = key
 
     def _theme_id(self, identifier: str) -> str:
         try:
