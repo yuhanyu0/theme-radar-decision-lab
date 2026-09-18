@@ -35,3 +35,10 @@ def test_biotech_adapter_preserves_domain_semantics_without_industrials_mislabel
     assert result.raw_facts == source.raw_facts
     assert result.provenance == source.provenance
     assert result.source_coverage == "biotech_clinical_core"
+
+
+def test_biotech_adapter_is_part_of_public_market_wide_api():
+    import decision_lab
+
+    assert decision_lab.BiotechClinicalAdapter is BiotechClinicalAdapter
+    assert decision_lab.BiotechClinicalEvidence is not None
