@@ -1,0 +1,36 @@
+theme: Genomics_Bio
+version: "0.1-public-seed"
+
+# Public discovery seed only. All members require independent primary-source
+# validation before promotion. effective_from is the date this research system
+# first admitted the candidate, preventing retroactive theme-basket membership.
+layers:
+  - name: genome_editing_therapeutics
+    description: In-vivo/ex-vivo gene editing, base editing and prime editing therapeutics.
+  - name: gene_therapy_delivery
+    description: Gene-therapy platforms and delivery technologies for genomic medicines.
+  - name: sequencing_enabling_tools
+    description: Sequencing instruments, long-read platforms, synthetic biology and single-cell/spatial tools.
+  - name: genomic_diagnostics
+    description: Genomic and multi-omic diagnostics, screening and disease-monitoring platforms.
+
+candidates:
+  - {ticker: CRSP, theme: Genomics_Bio, layer: genome_editing_therapeutics, membership_state: provisional, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+  - {ticker: BEAM, theme: Genomics_Bio, layer: genome_editing_therapeutics, membership_state: provisional, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+  - {ticker: NTLA, theme: Genomics_Bio, layer: genome_editing_therapeutics, membership_state: provisional, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+  - {ticker: PRME, theme: Genomics_Bio, layer: genome_editing_therapeutics, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+  - {ticker: EDIT, theme: Genomics_Bio, layer: genome_editing_therapeutics, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+  - {ticker: CRBU, theme: Genomics_Bio, layer: genome_editing_therapeutics, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+
+  - {ticker: KRYS, theme: Genomics_Bio, layer: gene_therapy_delivery, membership_state: provisional, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+  - {ticker: FDMT, theme: Genomics_Bio, layer: gene_therapy_delivery, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+  - {ticker: RGNX, theme: Genomics_Bio, layer: gene_therapy_delivery, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source clinical/economic exposure validation pending."}
+
+  - {ticker: ILMN, theme: Genomics_Bio, layer: sequencing_enabling_tools, membership_state: provisional, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source genomic-tools exposure validation pending."}
+  - {ticker: PACB, theme: Genomics_Bio, layer: sequencing_enabling_tools, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source genomic-tools exposure validation pending."}
+  - {ticker: TWST, theme: Genomics_Bio, layer: sequencing_enabling_tools, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source genomic-tools exposure validation pending."}
+  - {ticker: TXG, theme: Genomics_Bio, layer: sequencing_enabling_tools, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source genomic-tools exposure validation pending."}
+
+  - {ticker: GRAL, theme: Genomics_Bio, layer: genomic_diagnostics, membership_state: discovery, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source diagnostics exposure validation pending."}
+  - {ticker: GH, theme: Genomics_Bio, layer: genomic_diagnostics, membership_state: provisional, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source diagnostics exposure validation pending."}
+  - {ticker: NTRA, theme: Genomics_Bio, layer: genomic_diagnostics, membership_state: provisional, expression_role: unclassified, effective_from: "2026-09-18", provenance: ["alpaca_asset_reference:2026-09-18"], notes: "Seed membership only; primary-source diagnostics exposure validation pending."}
