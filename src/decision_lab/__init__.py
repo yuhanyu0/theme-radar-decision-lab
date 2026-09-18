@@ -1,6 +1,8 @@
 """Theme Radar Decision Lab core package."""
 
 from .adapters import (
+    BiotechClinicalAdapter,
+    BiotechClinicalEvidence,
     CompanyEvidenceAdapter,
     CompanyEvidenceInput,
     GenericEvidenceAdapter,
@@ -31,6 +33,8 @@ from .themes import (
 from .universe import Candidate, ThemeLayer, ThemeUniverse
 
 __all__ = [
+    "BiotechClinicalAdapter",
+    "BiotechClinicalEvidence",
     "Candidate",
     "CompanyEvidenceAdapter",
     "CompanyEvidenceInput",
