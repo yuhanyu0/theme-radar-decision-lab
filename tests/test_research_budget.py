@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from decision_lab.research_budget import (
@@ -421,3 +423,36 @@ def test_negative_research_slots_are_rejected():
             ResearchBudgetConfig(theme_research_slots=-1),
             cycle_as_of="2026-09-19",
         )
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_research_budget_default_config_matches_approved_capacity_contract():
+    from decision_lab.research_budget import load_research_budget_config
+
+    config = load_research_budget_config(
+        ROOT / "config/policies/research_budget_defaults.yaml"
+    )
+
+    assert config.version == "0.1"
+    assert config.calibration_label == "uncalibrated"
+    assert config.theme_research_slots == 8
+    assert config.full_decision_slots == 3
+    assert config.minimum_independent_sources == 1
+    assert config.confidence_floor == 0.45
+    assert config.full_priority_gate == 0.65
+    assert config.full_novelty_gate == 0.35
+    assert config.novelty_floor == 0.20
+    assert config.repeated_no_change_penalty_per_cycle == 0.10
+    assert config.repeated_no_change_penalty_cap == 0.30
+
+
+def test_research_budget_interfaces_are_publicly_importable():
+    import decision_lab
+
+    assert decision_lab.ResearchTier is not None
+    assert decision_lab.ResearchAllocation is not None
+    assert decision_lab.ResearchBudgetConfig is not None
+    assert decision_lab.ResearchBudgetAllocator is not None
+    assert decision_lab.load_research_budget_config is not None
