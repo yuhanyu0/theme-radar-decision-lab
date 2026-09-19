@@ -8,7 +8,7 @@ An independent, auditable research/evaluation layer for Theme Radar.
 
 Pipeline:
 
-`Raw Evidence -> Radar/Navigator Snapshot -> Dynamic Universe -> Company/Expression Validation -> Tape State Machine -> Playbook Router -> Immutable Decision Ledger -> Outcome Engine -> Walk-forward Evaluation`
+`Raw Evidence -> World Scanner -> Research Budget -> Dynamic Theme Universe -> Company/Expression Validation -> Tape State Machine -> Playbook Router -> Immutable Decision Ledger -> Outcome Engine -> Walk-forward Evaluation`
 
 ## Non-negotiable invariants
 
@@ -21,9 +21,9 @@ Pipeline:
 
 ## Market-wide architecture
 
-`DataCenter_Infra` remains the first validated theme package, but the core engine is theme-agnostic. A `ThemeRegistry` manages theme lifecycle/versioning, each `ThemePackage` carries its own universe and Theme-key policy, company facts are normalized through evidence adapters, and hierarchical linkage separates broad-market/sector/industry movement from target-excluded theme linkage.
+`DataCenter_Infra` and `Genomics_Bio` are normal theme packages in a theme-agnostic core. A `ThemeRegistry` manages lifecycle/versioning, each `ThemePackage` carries its own universe and Theme-key policy, company facts are normalized through evidence adapters, and hierarchical linkage separates broad-market/sector/industry movement from target-excluded theme linkage.
 
-The current implementation increment intentionally does not add a global scanner or a second live theme yet. Its acceptance test is stricter: DataCenter must load through the generic package interface without semantic drift, while existing Tape, A-H routing, ledger, and outcome behavior stays unchanged.
+A deterministic World Scanner consumes cheap multi-source theme observations, keeps Radar/model evidence distinct from independent evidence, and emits lifecycle/priority recommendations without mutating the registry. A capacity-limited Research Budget Allocator routes eligible themes into theme research or full decision research. This layer allocates research attention only: ThemeKey calibration, Tape, A-H routing, ledger immutability, and the no-brokerage-execution invariant remain separate. Ticker-first clustering and automatic theme creation are still deferred.
 
 ## Repository layout
 
