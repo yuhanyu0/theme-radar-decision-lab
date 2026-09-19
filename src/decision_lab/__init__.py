@@ -22,6 +22,7 @@ from .outcomes import evaluate_forward_outcomes, missed_upside, summarize_decisi
 from .playbooks import PlaybookRouting, route_playbooks
 from .tape import TapeAssessment, assess_tape_state
 from .themes import (
+    ThemeCalibrationState,
     ThemeDefinition,
     ThemeKeyEvaluation,
     ThemeKeyPolicy,
@@ -47,6 +48,7 @@ __all__ = [
     "NormalizedCompanyEvidence",
     "PlaybookRouting",
     "TapeAssessment",
+    "ThemeCalibrationState",
     "ThemeDefinition",
     "ThemeKeyEvaluation",
     "ThemeKeyPolicy",
