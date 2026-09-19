@@ -8,7 +8,7 @@ from typing import Literal, Mapping, Sequence
 
 from .evidence import SourceType
 from .ledger import canonical_hash
-from .themes import ThemeDefinition
+from .themes import ThemeDefinition, ThemeLifecycleState
 
 
 class SupportDirection(str, Enum):
@@ -116,11 +116,22 @@ def _parse_utc(value: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _is_date_only(value: str) -> bool:
+    return "T" not in value and " " not in value
+
+
 def _parse_cycle_utc(value: str) -> datetime:
     dt = _parse_utc(value)
-    if "T" not in value and " " not in value:
+    if _is_date_only(value):
         return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
     return dt
+
+
+def _prior_is_strictly_earlier(prior_as_of: str, cycle_as_of: str) -> bool:
+    prior_dt = _parse_utc(prior_as_of)
+    if _is_date_only(cycle_as_of):
+        return prior_dt.date() < _parse_utc(cycle_as_of).date()
+    return prior_dt < _parse_utc(cycle_as_of)
 
 
 def _clip01(value: float) -> float:
@@ -271,18 +282,11 @@ def _priority(
     stale_ratio: float,
     config: ScannerConfig,
 ) -> float:
-    substantive = {
-        name: value
-        for name, value in scores.items()
-        if value is not None
-    }
+    substantive = {name: value for name, value in scores.items() if value is not None}
     if not substantive:
         return 0.0
 
-    positive = {
-        **substantive,
-        "evidence_confidence": evidence_confidence,
-    }
+    positive = {**substantive, "evidence_confidence": evidence_confidence}
     numerator = 0.0
     denominator = 0.0
     for name, value in positive.items():
@@ -293,9 +297,112 @@ def _priority(
         denominator += weight
     base_priority = 0.0 if denominator == 0.0 else numerator / denominator
     penalty = max(contradiction_ratio, stale_ratio)
-    return _clip01(
-        base_priority - config.contradiction_staleness_penalty * penalty
-    )
+    return _clip01(base_priority - config.contradiction_staleness_penalty * penalty)
+
+
+def _history_by_theme(
+    prior_results: Sequence[ThemeScanResult],
+    *,
+    cycle_as_of: str,
+) -> dict[str, list[ThemeScanResult]]:
+    history: dict[str, list[ThemeScanResult]] = {}
+    for prior in prior_results:
+        if not _prior_is_strictly_earlier(prior.as_of, cycle_as_of):
+            raise ValueError("prior scan result must be strictly earlier")
+        history.setdefault(prior.theme_id, []).append(prior)
+    for rows in history.values():
+        rows.sort(key=lambda item: _parse_utc(item.as_of))
+    return history
+
+
+def _forced_review(
+    *,
+    definition: ThemeDefinition | None,
+    contradiction_ratio: float,
+    independent_contradiction_count: int,
+    persistence_score: float | None,
+    breadth_score: float | None,
+    config: ScannerConfig,
+) -> tuple[bool, int, tuple[str, ...]]:
+    reasons: list[str] = []
+    severity = 0
+
+    if (
+        independent_contradiction_count > 0
+        and contradiction_ratio >= config.hard_contradiction_ratio
+    ):
+        reasons.append("independent contradiction")
+        severity = 3
+
+    if (
+        definition is not None
+        and definition.lifecycle_state
+        in (ThemeLifecycleState.STRENGTHENING, ThemeLifecycleState.MATURE)
+        and persistence_score is not None
+        and breadth_score is not None
+        and persistence_score < config.weakening_low_persistence_gate
+        and breadth_score < config.weakening_low_breadth_gate
+    ):
+        reasons.append("lifecycle deterioration")
+        severity = max(severity, 2)
+
+    return bool(reasons), severity, tuple(reasons)
+
+
+def _lifecycle_recommendation(
+    *,
+    definition: ThemeDefinition | None,
+    history: Sequence[ThemeScanResult],
+    independent_support_count: int,
+    contradiction_ratio: float,
+    independent_contradiction_count: int,
+    structural_score: float | None,
+    persistence_score: float | None,
+    breadth_score: float | None,
+    config: ScannerConfig,
+) -> str:
+    if definition is None:
+        return "discovery"
+
+    state = definition.lifecycle_state
+    if (
+        state in (ThemeLifecycleState.DISCOVERY, ThemeLifecycleState.FORMING)
+        and independent_support_count >= 1
+        and independent_contradiction_count == 0
+        and structural_score is not None
+        and persistence_score is not None
+        and structural_score >= config.strengthening_structure_gate
+        and persistence_score >= config.strengthening_persistence_gate
+    ):
+        return "strengthening"
+
+    if (
+        state in (ThemeLifecycleState.STRENGTHENING, ThemeLifecycleState.MATURE)
+        and independent_contradiction_count > 0
+        and contradiction_ratio >= config.hard_contradiction_ratio
+    ):
+        return "weakening"
+
+    if (
+        state in (ThemeLifecycleState.STRENGTHENING, ThemeLifecycleState.MATURE)
+        and persistence_score is not None
+        and breadth_score is not None
+        and persistence_score < config.weakening_low_persistence_gate
+        and breadth_score < config.weakening_low_breadth_gate
+    ):
+        return "weakening"
+
+    dormant_window = config.dormant_no_support_cycles
+    if (
+        state is ThemeLifecycleState.WEAKENING
+        and dormant_window > 0
+        and independent_support_count == 0
+        and len(history) >= dormant_window
+        and all(item.independent_support_count == 0 for item in history[-dormant_window:])
+    ):
+        return "dormant"
+
+    return "no_change"
 
 
 def rank_themes(
@@ -307,7 +414,7 @@ def rank_themes(
     cycle_as_of: str,
 ) -> list[ThemeScanResult]:
     cycle_dt = _parse_cycle_utc(cycle_as_of)
-    _ = prior_results
+    history = _history_by_theme(prior_results, cycle_as_of=cycle_as_of)
 
     by_theme: dict[str, list[ThemeScanObservation]] = {}
     for obs in observations:
@@ -325,8 +432,7 @@ def rank_themes(
             for source_ref, source_rows in independent_sources.items()
         }
         independent_support_count = sum(
-            direction is SupportDirection.SUPPORTING
-            for direction in directions.values()
+            direction is SupportDirection.SUPPORTING for direction in directions.values()
         )
         independent_contradiction_count = sum(
             direction is SupportDirection.CONTRADICTING
@@ -361,9 +467,29 @@ def rank_themes(
         )
 
         definition = registry_state.get(theme_id)
-        evidence_refs = tuple(
-            sorted({ref for row in rows for ref in row.evidence_refs})
+        theme_history = history.get(theme_id, [])
+        forced_review, forced_severity, forced_reasons = _forced_review(
+            definition=definition,
+            contradiction_ratio=contradiction_ratio,
+            independent_contradiction_count=independent_contradiction_count,
+            persistence_score=scores["persistence"],
+            breadth_score=scores["breadth"],
+            config=config,
         )
+        lifecycle = _lifecycle_recommendation(
+            definition=definition,
+            history=theme_history,
+            independent_support_count=independent_support_count,
+            contradiction_ratio=contradiction_ratio,
+            independent_contradiction_count=independent_contradiction_count,
+            structural_score=scores["structural"],
+            persistence_score=scores["persistence"],
+            breadth_score=scores["breadth"],
+            config=config,
+        )
+        evidence_refs = tuple(sorted({ref for row in rows for ref in row.evidence_refs}))
+        prior_refs = tuple(canonical_hash(asdict(item)) for item in theme_history)
+
         results.append(
             ThemeScanResult(
                 theme_id=theme_id,
@@ -377,22 +503,24 @@ def rank_themes(
                 evidence_confidence=confidence,
                 independent_support_count=independent_support_count,
                 independent_contradiction_count=independent_contradiction_count,
-                lifecycle_recommendation="no_change",
+                lifecycle_recommendation=lifecycle,
                 research_priority=priority,
-                forced_review=False,
-                forced_review_severity=0,
-                forced_review_reasons=(),
+                forced_review=forced_review,
+                forced_review_severity=forced_severity,
+                forced_review_reasons=forced_reasons,
                 reasons=(),
                 evidence_refs=evidence_refs,
                 config_hash=config_hash,
                 registry_version=None if definition is None else definition.version,
-                prior_result_refs=(),
+                prior_result_refs=prior_refs,
             )
         )
 
     return sorted(
         results,
         key=lambda item: (
+            not item.forced_review,
+            -item.forced_review_severity,
             -item.research_priority,
             -item.evidence_confidence,
             item.theme_id,
