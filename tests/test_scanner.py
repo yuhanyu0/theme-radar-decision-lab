@@ -6,6 +6,7 @@ from decision_lab.scanner import (
     ScannerConfig,
     SupportDirection,
     ThemeScanObservation,
+    ThemeScanResult,
     rank_themes,
 )
 from decision_lab.themes import ThemeDefinition, ThemeLifecycleState
@@ -288,3 +289,213 @@ def test_scanner_does_not_mutate_registry_state():
     )
 
     assert registry == before
+
+
+
+def _prior(
+    theme_id,
+    as_of,
+    *,
+    novelty=0.05,
+    priority=0.70,
+    independent_support=0,
+):
+    return ThemeScanResult(
+        theme_id=theme_id,
+        as_of=as_of,
+        discovery_score=0.7,
+        structural_score=0.7,
+        persistence_score=0.7,
+        breadth_score=0.7,
+        relative_strength_score=0.7,
+        novelty_score=novelty,
+        evidence_confidence=0.7,
+        independent_support_count=independent_support,
+        independent_contradiction_count=0,
+        lifecycle_recommendation="no_change",
+        research_priority=priority,
+        forced_review=False,
+        forced_review_severity=0,
+        forced_review_reasons=(),
+        reasons=(),
+        evidence_refs=(f"prior:{as_of}",),
+        config_hash="prior-config",
+        registry_version="1",
+        prior_result_refs=(),
+    )
+
+
+def test_same_or_future_cycle_prior_result_is_rejected():
+    with pytest.raises(ValueError, match="prior scan result must be strictly earlier"):
+        rank_themes(
+            [_obs()],
+            _registry(),
+            [_prior("DataCenter_Infra", "2026-09-19T23:59:59+00:00")],
+            ScannerConfig(),
+            cycle_as_of="2026-09-19T23:59:59+00:00",
+        )
+
+
+def test_same_calendar_date_prior_is_not_historical_for_date_only_cycle():
+    with pytest.raises(ValueError, match="prior scan result must be strictly earlier"):
+        rank_themes(
+            [_obs(as_of="2026-09-19T12:00:00+00:00")],
+            _registry(),
+            [_prior("DataCenter_Infra", "2026-09-19")],
+            ScannerConfig(),
+            cycle_as_of="2026-09-19",
+        )
+
+
+def test_discovery_or_forming_theme_can_recommend_strengthening_without_registry_mutation():
+    registry = {
+        "New_Theme": ThemeDefinition(
+            theme_id="New_Theme",
+            display_name="New Theme",
+            lifecycle_state=ThemeLifecycleState.FORMING,
+            version="1",
+        )
+    }
+    observation = _obs(
+        theme_id="New_Theme",
+        source_ref="market:new",
+        structure=0.75,
+        persistence=0.75,
+    )
+
+    before = deepcopy(registry)
+    result = rank_themes(
+        [observation],
+        registry,
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19T23:59:59+00:00",
+    )[0]
+
+    assert result.lifecycle_recommendation == "strengthening"
+    assert registry == before
+    assert registry["New_Theme"].lifecycle_state is ThemeLifecycleState.FORMING
+
+
+def test_hard_independent_contradiction_forces_review_and_recommends_weakening():
+    contradiction = _obs(
+        support=SupportDirection.CONTRADICTING,
+        source_ref="official:contradiction",
+        structure=0.2,
+        persistence=0.2,
+        breadth=0.2,
+        relative_strength=0.2,
+        novelty=0.9,
+    )
+
+    result = rank_themes(
+        [contradiction],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19T23:59:59+00:00",
+    )[0]
+
+    assert result.lifecycle_recommendation == "weakening"
+    assert result.forced_review
+    assert result.forced_review_severity == 3
+    assert "independent contradiction" in result.forced_review_reasons
+
+
+def test_low_persistence_and_breadth_force_lifecycle_deterioration_review():
+    observation = _obs(
+        source_ref="market:deterioration",
+        persistence=0.20,
+        breadth=0.20,
+        structure=0.55,
+        novelty=0.40,
+    )
+
+    result = rank_themes(
+        [observation],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19T23:59:59+00:00",
+    )[0]
+
+    assert result.lifecycle_recommendation == "weakening"
+    assert result.forced_review
+    assert result.forced_review_severity == 2
+    assert "lifecycle deterioration" in result.forced_review_reasons
+
+
+def test_weakening_theme_with_three_prior_no_support_cycles_can_recommend_dormant():
+    registry = {
+        "Weak_Theme": ThemeDefinition(
+            theme_id="Weak_Theme",
+            display_name="Weak Theme",
+            lifecycle_state=ThemeLifecycleState.WEAKENING,
+            version="2",
+        )
+    }
+    priors = [
+        _prior("Weak_Theme", "2026-09-16", independent_support=0),
+        _prior("Weak_Theme", "2026-09-17", independent_support=0),
+        _prior("Weak_Theme", "2026-09-18", independent_support=0),
+    ]
+    current = _obs(
+        theme_id="Weak_Theme",
+        as_of="2026-09-19",
+        source_ref="market:neutral",
+        support=SupportDirection.NEUTRAL,
+        persistence=0.30,
+        breadth=0.30,
+    )
+
+    result = rank_themes(
+        [current],
+        registry,
+        priors,
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert result.lifecycle_recommendation == "dormant"
+    assert len(result.prior_result_refs) == 3
+
+
+def test_unknown_theme_is_scanned_as_discovery_candidate_without_registry_version():
+    observation = _obs(theme_id="Unknown_Theme", source_ref="market:unknown")
+
+    result = rank_themes(
+        [observation],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert result.theme_id == "Unknown_Theme"
+    assert result.registry_version is None
+    assert result.lifecycle_recommendation == "discovery"
+
+
+def test_scanner_output_order_is_deterministic_for_equal_inputs():
+    observations = [
+        _obs(theme_id="Z_Theme", source_ref="market:z"),
+        _obs(theme_id="A_Theme", source_ref="market:a"),
+    ]
+
+    first = rank_themes(
+        observations,
+        {},
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )
+    second = rank_themes(
+        list(reversed(observations)),
+        {},
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )
+
+    assert [item.theme_id for item in first] == ["A_Theme", "Z_Theme"]
+    assert first == second
