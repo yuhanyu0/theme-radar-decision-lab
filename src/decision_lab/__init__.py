@@ -20,6 +20,21 @@ from .ledger import canonical_hash, write_immutable_json
 from .linkage import LinkageResult, leave_one_out_control, rolling_linkage
 from .outcomes import evaluate_forward_outcomes, missed_upside, summarize_decisions
 from .playbooks import PlaybookRouting, route_playbooks
+from .research_budget import (
+    ResearchAllocation,
+    ResearchBudgetAllocator,
+    ResearchBudgetConfig,
+    ResearchTier,
+    load_research_budget_config,
+)
+from .scanner import (
+    ScannerConfig,
+    SupportDirection,
+    ThemeScanObservation,
+    ThemeScanResult,
+    load_scanner_config,
+    rank_themes,
+)
 from .tape import TapeAssessment, assess_tape_state
 from .themes import (
     ThemeCalibrationState,
@@ -34,6 +49,17 @@ from .themes import (
 from .universe import Candidate, ThemeLayer, ThemeUniverse
 
 __all__ = [
+    "ResearchAllocation",
+    "ResearchBudgetAllocator",
+    "ResearchBudgetConfig",
+    "ResearchTier",
+    "ScannerConfig",
+    "SupportDirection",
+    "ThemeScanObservation",
+    "ThemeScanResult",
+    "load_research_budget_config",
+    "load_scanner_config",
+    "rank_themes",
     "BiotechClinicalAdapter",
     "BiotechClinicalEvidence",
     "Candidate",
