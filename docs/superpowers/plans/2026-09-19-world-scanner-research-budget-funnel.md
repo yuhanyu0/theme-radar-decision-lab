@@ -753,7 +753,7 @@ pytest -q tests/test_scanner.py
 
 Expected: new history/lifecycle/forced-review tests FAIL while Task-1 tests remain green.
 
-- [ ] **Step 3: Implement strictly prior history, lifecycle recommendations, decay, forced review, and final ranking**
+- [ ] **Step 3: Implement strictly prior history, lifecycle recommendations, forced review, and final ranking**
 
 Extend `rank_themes`:
 
@@ -766,7 +766,7 @@ Extend `rank_themes`:
 4. Forced review:
    - independent contradiction ratio >= `hard_contradiction_ratio` -> severity 3, reason `"independent contradiction"`;
    - current effective state in strengthening/mature plus low persistence+low breadth -> severity 2, reason `"lifecycle deterioration"`;
-   - future forced-review source kinds such as Tape transitions remain deferred because Increment 3 has no Tape-event input field.
+   - v0.1 native forced-review detection is limited to independent hard contradiction/model divergence and lifecycle deterioration; external Tape/invalidation/source-integrity trigger inputs remain deferred exactly as specified.
 5. Lifecycle recommendation:
    - unknown theme -> `"discovery"`;
    - discovery/forming + independent support >=1 + structural >=0.60 + persistence >=0.60 + no contradiction -> `"strengthening"`;
@@ -826,6 +826,7 @@ git commit -m "feat: add scanner lifecycle and forced-review semantics"
 **Interfaces:**
 - Consumes:
   - `ThemeScanResult`
+  - prior `ResearchAllocation` history
   - `ThemeDefinition`
   - `canonical_hash`
 - Produces:
@@ -840,9 +841,8 @@ git commit -m "feat: add scanner lifecycle and forced-review semantics"
 Create `tests/test_research_budget.py`:
 
 ```python
-from dataclasses import replace
-
 from decision_lab.research_budget import (
+    ResearchAllocation,
     ResearchBudgetAllocator,
     ResearchBudgetConfig,
     ResearchTier,
@@ -1692,9 +1692,6 @@ weakening_low_persistence_gate: 0.35
 weakening_low_breadth_gate: 0.35
 hard_contradiction_ratio: 0.50
 dormant_no_support_cycles: 3
-novelty_floor: 0.20
-repeated_no_change_penalty_per_cycle: 0.10
-repeated_no_change_penalty_cap: 0.30
 ```
 
 - [ ] **Step 4: Add exact versioned budget config**
