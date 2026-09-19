@@ -167,10 +167,14 @@ Fields:
     theme_id
     as_of
     tier
-    priority
+    scan_priority
+    effective_priority
+    scan_novelty_score
     forced_review
     allocation_reasons
     source_scan_result_hash
+
+scan_priority is copied from the current ThemeScanResult. effective_priority is the allocator-side value after any eligible repeated-no-change penalty. Forced review bypasses that penalty, so forced allocations use effective_priority = scan_priority.
 
 This is a research-routing artifact, not a Decision Object.
 
@@ -295,18 +299,19 @@ Penalty diagnostics are:
     repeated_no_change_penalty =
         min(0.30, 0.10 * consecutive_no_change_cycles)
 
-Final priority is:
+Final scanner priority is:
 
     research_priority =
         clip(
             base_priority
-            - 0.25 * contradiction_or_staleness_penalty
-            - repeated_no_change_penalty,
+            - 0.25 * contradiction_or_staleness_penalty,
             0.0,
             1.0
         )
 
 Missing positive components are omitted from the weighted mean rather than imputed.
+
+Repeated-no-change decay is not applied in the scanner because the scanner does not know whether prior cycles actually consumed expensive research budget. That decay is applied later by the Research Budget Allocator using prior ResearchAllocation history.
 
 All weights and penalty coefficients are configuration values. The shipped v0.1 values are public-safe deterministic engineering defaults labeled uncalibrated. They are never ThemeKey thresholds or probabilities.
 
@@ -362,6 +367,7 @@ Public interface:
     ResearchBudgetAllocator.allocate(
         scan_results,
         registry_state,
+        prior_allocations,
         config,
         cycle_as_of,
     ) -> list[ResearchAllocation]
@@ -430,11 +436,35 @@ Forced review is available only for a known ThemeDefinition. An unknown discover
 
 Do not repeatedly spend expensive budget on a theme that remains unchanged.
 
-If a theme receives expensive research for consecutive prior cycles while novelty_score < novelty_floor, apply a configurable penalty to ordinary ranking.
+Decay belongs to the Research Budget Allocator, not the scanner, because only allocation history proves that expensive research budget was actually spent.
 
-This penalty cannot suppress forced review, a new independent contradiction, a lifecycle transition, or a material Tape transition.
+The allocator receives prior ResearchAllocation objects. For each theme, walk backward through strictly prior allocations ordered by as_of and count consecutive allocations where:
 
-History must be strictly prior-dated.
+- tier is THEME_RESEARCH or FULL_DECISION_RESEARCH; and
+- scan_novelty_score is present and < novelty_floor.
+
+Stop at the first SCAN_ONLY allocation, missing novelty, or novelty >= novelty_floor.
+
+Then compute:
+
+    repeated_no_change_penalty =
+        min(
+            repeated_no_change_penalty_cap,
+            repeated_no_change_penalty_per_cycle * consecutive_expensive_low_novelty_cycles
+        )
+
+For ordinary allocation:
+
+    effective_priority =
+        max(0.0, scan_priority - repeated_no_change_penalty)
+
+For forced review:
+
+    effective_priority = scan_priority
+
+The penalty cannot suppress forced review, a new independent contradiction, or another forced-review condition.
+
+Every prior allocation used for decay must satisfy prior.as_of < cycle_as_of. Same-cycle or future allocation history is rejected from decay computation.
 
 ## 13. Determinism and tie-breaking
 
@@ -444,7 +474,7 @@ Tie-break order:
 
 1. forced review before ordinary allocation;
 2. higher forced-review severity;
-3. higher research priority;
+3. higher effective priority;
 4. higher evidence confidence;
 5. lexical theme_id.
 
@@ -524,7 +554,7 @@ Existing modules should remain unchanged except for narrow public exports if nee
 
 ## 18. Version 0.1 configuration
 
-Scanner config contains source-class weights, staleness window, component weights, penalty coefficients, lifecycle recommendation gates, version, and calibration_label = uncalibrated.
+Scanner config contains source-class weights, staleness window, component weights, contradiction/staleness penalty coefficients, lifecycle recommendation gates, version, and calibration_label = uncalibrated.
 
 Version 0.1 source-class weights are:
 
@@ -547,9 +577,6 @@ Version 0.1 scanner defaults include:
     weakening_low_breadth_gate: 0.35
     hard_contradiction_ratio: 0.50
     dormant_no_support_cycles: 3
-    novelty_floor: 0.20
-    repeated_no_change_penalty_per_cycle: 0.10
-    repeated_no_change_penalty_cap: 0.30
     calibration_label: uncalibrated
 
 Budget config starts with:
@@ -561,6 +588,9 @@ Budget config starts with:
     confidence_floor: 0.45
     full_priority_gate: 0.65
     full_novelty_gate: 0.35
+    novelty_floor: 0.20
+    repeated_no_change_penalty_per_cycle: 0.10
+    repeated_no_change_penalty_cap: 0.30
     calibration_label: uncalibrated
 
 Positive-component weights are discovery 0.15, structural 0.20, persistence 0.15, breadth 0.10, relative_strength 0.10, novelty 0.15, and evidence_confidence 0.15. The contradiction/staleness penalty coefficient is 0.25.
@@ -581,13 +611,15 @@ One cycle:
 8. Compute evidence confidence and research priority.
 9. Detect forced-review conditions.
 10. Emit deterministic ThemeScanResult objects.
-11. Pass results to ResearchBudgetAllocator.
-12. Reserve forced-review capacity.
-13. Allocate ordinary THEME_RESEARCH slots.
-14. Allocate ordinary FULL_DECISION_RESEARCH slots.
-15. Emit ResearchAllocation objects with provenance.
-16. Only allocated themes proceed into existing downstream research.
-17. ThemeKey/Tape/router rules remain unchanged.
+11. Load strictly prior ResearchAllocation history for budget-decay computation.
+12. Pass current scan results plus prior allocations to ResearchBudgetAllocator.
+13. Compute allocator-side effective priority from actual prior expensive-research history.
+14. Reserve forced-review capacity.
+15. Allocate ordinary THEME_RESEARCH slots.
+16. Allocate ordinary FULL_DECISION_RESEARCH slots.
+17. Emit ResearchAllocation objects with provenance.
+18. Only allocated themes proceed into existing downstream research.
+19. ThemeKey/Tape/router rules remain unchanged.
 
 ## 20. Testing strategy
 
@@ -601,10 +633,12 @@ Version 0.1 must prove:
 6. Stale coverage lowers confidence and can prevent ordinary promotion.
 7. Independent contradiction produces explicit reasons.
 8. Forced review preempts a lower-priority ordinary slot.
-9. Repeated-no-change decay lowers ordinary priority.
-10. Forced review bypasses repeated-no-change decay.
-11. Future-dated observations are rejected.
-12. prior.as_of >= cycle_as_of is rejected from historical features.
+9. Repeated-no-change decay lowers ordinary effective priority only when prior expensive allocations actually occurred.
+10. A low-novelty prior SCAN_ONLY cycle does not create repeated-no-change decay.
+11. Forced review bypasses repeated-no-change decay.
+12. Future-dated observations are rejected.
+13. prior scan-result as_of >= cycle_as_of is rejected from scanner historical features.
+14. prior allocation as_of >= cycle_as_of is rejected from allocator decay history.
 13. Missing signals remain missing.
 14. Same inputs produce identical ordered outputs.
 15. Tie-breaking follows the documented order.
@@ -624,7 +658,7 @@ Increment 3 is complete when:
 - model-only strength cannot receive ordinary expensive research;
 - strengthening themes with independent corroboration can receive bounded research capacity;
 - forced review can preempt ordinary allocation with explicit reasons;
-- repeated-no-change decay uses prior-only history;
+- repeated-no-change decay uses strictly prior ResearchAllocation history and only counts prior expensive allocations;
 - ranking/allocation is deterministic;
 - scanner emits lifecycle recommendations without mutating ThemeRegistry;
 - allocation cannot change ThemeKey permission;
