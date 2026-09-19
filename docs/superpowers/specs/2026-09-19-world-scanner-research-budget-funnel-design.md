@@ -230,26 +230,85 @@ Missing components remain None. They are never imputed as zero or one.
 
 Evidence confidence rises with multiple independent evidence classes, recent observations, and agreement. It falls with stale observations, direct independent contradiction, model-only coverage, or repeated same-source evidence.
 
-It is a diagnostic score, not a probability.
+Version 0.1 uses a deterministic engineering formula:
+
+    coverage = min(1.0, independent_source_count / 2.0)
+
+    agreement =
+        1.0 - independent_contradiction_count
+              / max(1, independent_support_count + independent_contradiction_count)
+
+    freshness =
+        mean(max(0.0, 1.0 - age_days / stale_after_days))
+        over independent observations
+
+    evidence_confidence =
+        0.40 * coverage
+      + 0.30 * agreement
+      + 0.30 * freshness
+
+If there are no independent observations, evidence_confidence = 0.0.
+
+Default stale_after_days = 5 calendar days.
+
+These values are uncalibrated research-routing defaults, not probabilities or investment thresholds.
 
 ### 7.4 Research priority
 
-Use a configurable deterministic score:
+Use a configurable deterministic score.
 
-    Priority_j =
-        w_D * discovery
-      + w_S * structural
-      + w_P * persistence
-      + w_B * breadth
-      + w_R * relative_strength
-      + w_N * novelty
-      + w_C * evidence_confidence
-      - w_X * contradiction_or_staleness_penalty
-      - w_Q * repeated_no_change_penalty
+First compute a weighted mean over available positive components only:
 
-Weights are configuration values, not economic truths.
+    base_priority =
+        weighted_mean(
+            discovery,
+            structural,
+            persistence,
+            breadth,
+            relative_strength,
+            novelty,
+            evidence_confidence
+        )
 
-Version 0.1 may ship public-safe deterministic defaults only to test ranking behavior. The config must label them uncalibrated. They are never ThemeKey thresholds or probabilities.
+Version 0.1 positive-component weights are:
+
+    discovery = 0.15
+    structural = 0.20
+    persistence = 0.15
+    breadth = 0.10
+    relative_strength = 0.10
+    novelty = 0.15
+    evidence_confidence = 0.15
+
+Penalty diagnostics are:
+
+    contradiction_ratio =
+        independent_contradiction_count
+        / max(1, independent_support_count + independent_contradiction_count)
+
+    stale_ratio =
+        stale_observation_count / max(1, total_observation_count)
+
+    contradiction_or_staleness_penalty =
+        max(contradiction_ratio, stale_ratio)
+
+    repeated_no_change_penalty =
+        min(0.30, 0.10 * consecutive_no_change_cycles)
+
+Final priority is:
+
+    research_priority =
+        clip(
+            base_priority
+            - 0.25 * contradiction_or_staleness_penalty
+            - repeated_no_change_penalty,
+            0.0,
+            1.0
+        )
+
+Missing positive components are omitted from the weighted mean rather than imputed.
+
+All weights and penalty coefficients are configuration values. The shipped v0.1 values are public-safe deterministic engineering defaults labeled uncalibrated. They are never ThemeKey thresholds or probabilities.
 
 ## 8. Independent corroboration rule
 
@@ -284,13 +343,17 @@ The scanner may recommend:
 
 It never applies these states directly.
 
-Version 0.1 is conservative:
+Version 0.1 uses conservative deterministic recommendations:
 
-- repeated independent strengthening evidence may recommend strengthening;
-- fading persistence/breadth may recommend weakening;
-- prolonged absence of support may recommend dormant;
-- direct contradiction should usually trigger review rather than immediate retirement;
-- split/merge recommendations are deferred.
+- If current state is discovery or forming, independent_support_count >= 1, structural_score >= 0.60, persistence_score >= 0.60, and independent_contradiction_count = 0, recommend strengthening.
+- If current state is strengthening or mature and contradiction_ratio >= 0.50, recommend weakening and forced review.
+- If current state is strengthening or mature and both persistence_score < 0.35 and breadth_score < 0.35, recommend weakening.
+- If current state is weakening and the last 3 strictly prior cycles plus the current cycle contain zero independent supporting observations, recommend dormant.
+- Otherwise recommend no_change.
+- Version 0.1 never recommends retired automatically.
+- Split/merge recommendations are deferred.
+
+These are lifecycle-review heuristics only. They do not mutate ThemeRegistry.
 
 ## 10. Research Budget Allocator
 
@@ -310,6 +373,10 @@ Initial configurable caps:
     theme_research_slots = 8
     full_decision_slots = 3
 
+FULL_DECISION_RESEARCH is a subset of THEME_RESEARCH for capacity accounting. Every FULL_DECISION_RESEARCH allocation consumes one theme_research slot and one full_decision slot.
+
+Forced reviews also consume both slots. They preempt ordinary allocations but do not create capacity beyond the configured caps.
+
 These are resource limits, not empirical market truths.
 
 ### 10.2 Ordinary tier eligibility
@@ -320,14 +387,17 @@ THEME_RESEARCH eligibility requires:
 
 - current effective lifecycle state = strengthening;
 - independent corroboration satisfied;
-- evidence confidence above configured minimum;
+- evidence_confidence >= 0.45;
 - remaining theme-research capacity.
 
 FULL_DECISION_RESEARCH eligibility requires:
 
 - THEME_RESEARCH eligibility;
-- priority and novelty above configured full-research gates;
+- research_priority >= 0.65;
+- novelty_score is present and >= 0.35;
 - remaining full-decision capacity.
+
+The values 0.45, 0.65, and 0.35 are v0.1 uncalibrated research-routing defaults and live in configuration.
 
 ThemeCalibrationState does not control research allocation. Therefore Genomics_Bio may receive FULL_DECISION_RESEARCH while ThemeKey remains false because it is uncalibrated.
 
@@ -353,6 +423,8 @@ Forced review:
 - records exact reasons and severity.
 
 If forced-review demand exceeds capacity, sort by severity and then deterministic tie-breakers.
+
+Forced review is available only for a known ThemeDefinition. An unknown discovery candidate cannot enter package-dependent FULL_DECISION_RESEARCH until it is explicitly registered and has a package.
 
 ## 12. Repeated-no-change decay
 
@@ -452,7 +524,33 @@ Existing modules should remain unchanged except for narrow public exports if nee
 
 ## 18. Version 0.1 configuration
 
-Scanner config contains source-class weights, staleness window, confidence floor, novelty floor, repeated-no-change penalty, version, and calibration_label = uncalibrated.
+Scanner config contains source-class weights, staleness window, component weights, penalty coefficients, lifecycle recommendation gates, version, and calibration_label = uncalibrated.
+
+Version 0.1 source-class weights are:
+
+    sec_filing: 1.00
+    company_ir: 1.00
+    official_macro: 1.00
+    industry_primary: 0.95
+    market_data: 0.90
+    reputable_reporting: 0.75
+    derived_feature: 0.60
+    radar_model_output: 0.50
+
+Version 0.1 scanner defaults include:
+
+    stale_after_days: 5
+    confidence_floor: 0.45
+    strengthening_structure_gate: 0.60
+    strengthening_persistence_gate: 0.60
+    weakening_low_persistence_gate: 0.35
+    weakening_low_breadth_gate: 0.35
+    hard_contradiction_ratio: 0.50
+    dormant_no_support_cycles: 3
+    novelty_floor: 0.20
+    repeated_no_change_penalty_per_cycle: 0.10
+    repeated_no_change_penalty_cap: 0.30
+    calibration_label: uncalibrated
 
 Budget config starts with:
 
@@ -460,9 +558,14 @@ Budget config starts with:
     theme_research_slots: 8
     full_decision_slots: 3
     minimum_independent_sources: 1
+    confidence_floor: 0.45
+    full_priority_gate: 0.65
+    full_novelty_gate: 0.35
     calibration_label: uncalibrated
 
-Exact ranking weights live in config and are tested for deterministic application, not investment optimality.
+Positive-component weights are discovery 0.15, structural 0.20, persistence 0.15, breadth 0.10, relative_strength 0.10, novelty 0.15, and evidence_confidence 0.15. The contradiction/staleness penalty coefficient is 0.25.
+
+All shipped values are tested for deterministic application, not investment optimality.
 
 ## 19. Data flow
 
