@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from statistics import mean
-from typing import Literal, Mapping, Sequence
+from typing import Literal
 
 import yaml
 
@@ -120,10 +121,10 @@ _COMPONENT_FIELDS = {
 
 
 def _parse_utc(value: str) -> datetime:
-    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _is_date_only(value: str) -> bool:
