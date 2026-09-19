@@ -83,7 +83,10 @@ class ThemeKeyPolicy:
         carry: float | None = None,
         raw_calibrated_gap: float | None = None,
     ) -> ThemeKeyEvaluation:
-        if self.calibration_state is ThemeCalibrationState.UNCALIBRATED:
+        if self.calibration_state not in (
+            ThemeCalibrationState.OPERATIONAL,
+            ThemeCalibrationState.VALIDATED,
+        ):
             return ThemeKeyEvaluation(
                 satisfied=False,
                 permission=permission,
