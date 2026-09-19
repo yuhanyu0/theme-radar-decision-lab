@@ -183,6 +183,32 @@ def test_duplicate_independent_source_ref_counts_once():
     assert result.independent_support_count == 1
 
 
+def test_duplicate_source_ref_does_not_reweight_component_aggregation():
+    baseline = rank_themes(
+        [
+            _obs(source_ref="market:a", breadth=0.2),
+            _obs(source_ref="market:b", breadth=0.8),
+        ],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+    duplicated = rank_themes(
+        [
+            _obs(source_ref="market:a", breadth=0.2),
+            _obs(source_ref="market:a", breadth=0.2),
+            _obs(source_ref="market:b", breadth=0.8),
+        ],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert duplicated.breadth_score == baseline.breadth_score
+
+
 def test_naive_and_offset_timestamps_normalize_to_same_cycle():
     observations = [
         _obs(as_of="2026-09-19T15:00:00", source_ref="market:naive"),
@@ -427,9 +453,6 @@ class ScannerConfig:
     weakening_low_breadth_gate: float = 0.35
     hard_contradiction_ratio: float = 0.50
     dormant_no_support_cycles: int = 3
-    novelty_floor: float = 0.20
-    repeated_no_change_penalty_per_cycle: float = 0.10
-    repeated_no_change_penalty_cap: float = 0.30
 
 
 @dataclass(frozen=True)
@@ -506,7 +529,7 @@ def _validate_observation(obs, cycle_dt):
 
 Aggregate component values with the source-class weight for each observation. If a component has no values, return `None`.
 
-Count independent support/contradiction by distinct `source_ref`, not observation row.
+Collapse duplicate observations by `source_ref` before cross-source component aggregation: for each source_ref/component pair, average the duplicate row values first, then apply that source class's weight once. Count independent support/contradiction by distinct independent `source_ref`, not observation row.
 
 Compute:
 
@@ -572,7 +595,7 @@ git commit -m "feat: add deterministic theme scanner core"
 
 ---
 
-### Task 2: Prior-only history, lifecycle recommendations, repeated-no-change decay, forced-review diagnostics, and deterministic ranking
+### Task 2: Prior-only history, lifecycle recommendations, forced-review diagnostics, and deterministic ranking
 
 **Files:**
 - Modify: `src/decision_lab/scanner.py`
@@ -679,55 +702,6 @@ def test_hard_independent_contradiction_forces_review_and_recommends_weakening()
     assert "independent contradiction" in result.forced_review_reasons
 
 
-def test_repeated_no_change_prior_cycles_reduce_ordinary_priority():
-    priors = [
-        _prior("DataCenter_Infra", "2026-09-16", novelty=0.05),
-        _prior("DataCenter_Infra", "2026-09-17", novelty=0.05),
-        _prior("DataCenter_Infra", "2026-09-18", novelty=0.05),
-    ]
-
-    without_history = rank_themes(
-        [_obs(novelty=0.05)],
-        _registry(),
-        (),
-        ScannerConfig(),
-        cycle_as_of="2026-09-19",
-    )[0]
-    with_history = rank_themes(
-        [_obs(novelty=0.05)],
-        _registry(),
-        priors,
-        ScannerConfig(),
-        cycle_as_of="2026-09-19",
-    )[0]
-
-    assert with_history.research_priority < without_history.research_priority
-    assert len(with_history.prior_result_refs) == 3
-
-
-def test_forced_review_is_not_suppressed_by_repeated_no_change_decay():
-    priors = [
-        _prior("DataCenter_Infra", "2026-09-16", novelty=0.05),
-        _prior("DataCenter_Infra", "2026-09-17", novelty=0.05),
-        _prior("DataCenter_Infra", "2026-09-18", novelty=0.05),
-    ]
-    contradiction = _obs(
-        support=SupportDirection.CONTRADICTING,
-        source_ref="official:break",
-        novelty=0.9,
-    )
-
-    result = rank_themes(
-        [contradiction],
-        _registry(),
-        priors,
-        ScannerConfig(),
-        cycle_as_of="2026-09-19",
-    )[0]
-
-    assert result.forced_review
-
-
 def test_unknown_theme_is_scanned_as_discovery_candidate_without_registry_version():
     observation = _obs(theme_id="Unknown_Theme", source_ref="market:unknown")
 
@@ -788,11 +762,7 @@ Extend `rank_themes`:
    - if `_parse_utc(prior.as_of) >= cycle_dt`, raise `ValueError("prior scan result must be strictly earlier")`;
    - group by `theme_id`;
    - sort each theme's priors by normalized timestamp.
-3. Consecutive no-change cycles:
-   - walk backward over a theme's sorted priors;
-   - stop at first prior with `novelty_score is None or novelty_score >= config.novelty_floor`;
-   - count only consecutive low-novelty priors;
-   - compute `min(cap, per_cycle * count)`.
+3. Prior scan results are used only for lifecycle/history provenance in Increment 3. They do not apply research-budget decay because scan history does not prove expensive research was allocated.
 4. Forced review:
    - independent contradiction ratio >= `hard_contradiction_ratio` -> severity 3, reason `"independent contradiction"`;
    - current effective state in strengthening/mature plus low persistence+low breadth -> severity 2, reason `"lifecycle deterioration"`;
@@ -805,10 +775,9 @@ Extend `rank_themes`:
    - weakening + current plus last 3 strictly prior cycles have zero independent support -> `"dormant"`;
    - otherwise `"no_change"`;
    - never emit `"retired"`.
-6. When `forced_review=True`, repeated-no-change penalty may still be reported in reasons but must not block the forced flag.
-7. Set `prior_result_refs` to deterministic hashes:
+6. Set `prior_result_refs` to deterministic hashes:
    `canonical_hash(asdict(prior))` for the actual priors consumed.
-8. Sort final scanner results by:
+7. Sort final scanner results by:
    ```python
    (
        not item.forced_review,
@@ -863,7 +832,7 @@ git commit -m "feat: add scanner lifecycle and forced-review semantics"
   - `ResearchTier(str, Enum)`
   - `ResearchAllocation`
   - `ResearchBudgetConfig`
-  - `ResearchBudgetAllocator.allocate(scan_results, registry_state, config, cycle_as_of) -> list[ResearchAllocation]`
+  - `ResearchBudgetAllocator.allocate(scan_results, registry_state, prior_allocations, config, cycle_as_of) -> list[ResearchAllocation]`
   - `load_research_budget_config(path) -> ResearchBudgetConfig`
 
 - [ ] **Step 1: Write RED allocator tests**
@@ -944,6 +913,7 @@ def test_model_only_strength_remains_scan_only():
     result = ResearchBudgetAllocator().allocate(
         [_scan("DataCenter_Infra", independent_support=0)],
         _registry(),
+        (),
         ResearchBudgetConfig(),
         cycle_as_of="2026-09-19",
     )[0]
@@ -958,6 +928,7 @@ def test_strengthening_theme_with_independent_support_can_enter_theme_research()
     result = ResearchBudgetAllocator().allocate(
         [scan],
         _registry(),
+        (),
         ResearchBudgetConfig(),
         cycle_as_of="2026-09-19",
     )[0]
@@ -969,6 +940,7 @@ def test_high_priority_novel_strengthening_theme_can_enter_full_research():
     result = ResearchBudgetAllocator().allocate(
         [_scan("DataCenter_Infra", priority=0.80, novelty=0.50)],
         _registry(),
+        (),
         ResearchBudgetConfig(),
         cycle_as_of="2026-09-19",
     )[0]
@@ -980,6 +952,7 @@ def test_unknown_theme_never_enters_package_dependent_research():
     result = ResearchBudgetAllocator().allocate(
         [_scan("Unknown_Theme", priority=1.0, novelty=1.0, forced=True, severity=3)],
         _registry(),
+        (),
         ResearchBudgetConfig(),
         cycle_as_of="2026-09-19",
     )[0]
@@ -996,6 +969,7 @@ def test_forced_review_preempts_lower_priority_ordinary_full_slot():
     results = ResearchBudgetAllocator().allocate(
         [ordinary, forced],
         _registry(),
+        (),
         config,
         cycle_as_of="2026-09-19",
     )
@@ -1025,6 +999,7 @@ def test_forced_review_over_capacity_respects_caps_and_deterministic_order():
     results = ResearchBudgetAllocator().allocate(
         scans,
         registry,
+        (),
         config,
         cycle_as_of="2026-09-19",
     )
@@ -1049,6 +1024,7 @@ def test_full_research_consumes_exactly_one_theme_slot():
     results = ResearchBudgetAllocator().allocate(
         scans,
         registry,
+        (),
         config,
         cycle_as_of="2026-09-19",
     )
@@ -1063,6 +1039,7 @@ def test_uncalibrated_themekey_does_not_block_research_or_become_satisfied():
     allocation = ResearchBudgetAllocator().allocate(
         [scan],
         _registry(),
+        (),
         ResearchBudgetConfig(),
         cycle_as_of="2026-09-19",
     )[0]
@@ -1080,6 +1057,110 @@ def test_uncalibrated_themekey_does_not_block_research_or_become_satisfied():
 
     assert allocation.tier is ResearchTier.FULL_DECISION_RESEARCH
     assert not theme_key.satisfied
+
+
+def _prior_allocation(
+    theme_id,
+    as_of,
+    *,
+    tier=ResearchTier.FULL_DECISION_RESEARCH,
+    novelty=0.05,
+    priority=0.80,
+):
+    return ResearchAllocation(
+        theme_id=theme_id,
+        as_of=as_of,
+        tier=tier,
+        scan_priority=priority,
+        effective_priority=priority,
+        scan_novelty_score=novelty,
+        forced_review=False,
+        allocation_reasons=("prior",),
+        source_scan_result_hash=f"hash:{theme_id}:{as_of}",
+    )
+
+
+def test_prior_expensive_low_novelty_allocations_reduce_effective_priority():
+    priors = [
+        _prior_allocation("DataCenter_Infra", "2026-09-16"),
+        _prior_allocation("DataCenter_Infra", "2026-09-17"),
+        _prior_allocation("DataCenter_Infra", "2026-09-18"),
+    ]
+    current = _scan("DataCenter_Infra", priority=0.80, novelty=0.10)
+
+    allocation = ResearchBudgetAllocator().allocate(
+        [current],
+        _registry(),
+        priors,
+        ResearchBudgetConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert allocation.scan_priority == 0.80
+    assert allocation.effective_priority == 0.50
+
+
+def test_prior_scan_only_low_novelty_does_not_create_decay():
+    priors = [
+        _prior_allocation(
+            "DataCenter_Infra",
+            "2026-09-18",
+            tier=ResearchTier.SCAN_ONLY,
+            novelty=0.01,
+        )
+    ]
+    current = _scan("DataCenter_Infra", priority=0.80, novelty=0.10)
+
+    allocation = ResearchBudgetAllocator().allocate(
+        [current],
+        _registry(),
+        priors,
+        ResearchBudgetConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert allocation.effective_priority == 0.80
+
+
+def test_forced_review_bypasses_prior_expensive_no_change_decay():
+    priors = [
+        _prior_allocation("Genomics_Bio", "2026-09-16"),
+        _prior_allocation("Genomics_Bio", "2026-09-17"),
+        _prior_allocation("Genomics_Bio", "2026-09-18"),
+    ]
+    forced = _scan(
+        "Genomics_Bio",
+        priority=0.80,
+        novelty=0.10,
+        forced=True,
+        severity=3,
+    )
+
+    allocation = ResearchBudgetAllocator().allocate(
+        [forced],
+        _registry(),
+        priors,
+        ResearchBudgetConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert allocation.tier is ResearchTier.FULL_DECISION_RESEARCH
+    assert allocation.effective_priority == allocation.scan_priority == 0.80
+
+
+def test_same_or_future_prior_allocation_is_rejected_from_decay_history():
+    prior = _prior_allocation("DataCenter_Infra", "2026-09-19")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="prior research allocation must be strictly earlier"):
+        ResearchBudgetAllocator().allocate(
+            [_scan("DataCenter_Infra")],
+            _registry(),
+            [prior],
+            ResearchBudgetConfig(),
+            cycle_as_of="2026-09-19",
+        )
 
 
 def test_stale_scanner_confidence_can_block_ordinary_promotion():
@@ -1117,11 +1198,12 @@ def test_stale_scanner_confidence_can_block_ordinary_promotion():
     allocation = ResearchBudgetAllocator().allocate(
         [stale_scan],
         _registry(),
-        ResearchBudgetConfig(),
+        (),
+        ResearchBudgetConfig(confidence_floor=0.55),
         cycle_as_of="2026-09-19",
     )[0]
 
-    assert stale_scan.evidence_confidence < ResearchBudgetConfig().confidence_floor
+    assert stale_scan.evidence_confidence < 0.55
     assert allocation.tier is ResearchTier.SCAN_ONLY
     assert "evidence confidence below floor" in allocation.allocation_reasons
 
@@ -1141,12 +1223,14 @@ def test_allocator_tie_break_is_deterministic():
     first = ResearchBudgetAllocator().allocate(
         scans,
         registry,
+        (),
         ResearchBudgetConfig(theme_research_slots=1, full_decision_slots=1),
         cycle_as_of="2026-09-19",
     )
     second = ResearchBudgetAllocator().allocate(
         list(reversed(scans)),
         registry,
+        (),
         ResearchBudgetConfig(theme_research_slots=1, full_decision_slots=1),
         cycle_as_of="2026-09-19",
     )
@@ -1195,7 +1279,9 @@ class ResearchAllocation:
     theme_id: str
     as_of: str
     tier: ResearchTier
-    priority: float
+    scan_priority: float
+    effective_priority: float
+    scan_novelty_score: float | None
     forced_review: bool
     allocation_reasons: tuple[str, ...]
     source_scan_result_hash: str
@@ -1211,6 +1297,9 @@ class ResearchBudgetConfig:
     confidence_floor: float = 0.45
     full_priority_gate: float = 0.65
     full_novelty_gate: float = 0.35
+    novelty_floor: float = 0.20
+    repeated_no_change_penalty_per_cycle: float = 0.10
+    repeated_no_change_penalty_cap: float = 0.30
 
 
 def load_research_budget_config(path: str | Path) -> ResearchBudgetConfig:
@@ -1224,6 +1313,7 @@ class ResearchBudgetAllocator:
         self,
         scan_results: Sequence[ThemeScanResult],
         registry_state: Mapping[str, ThemeDefinition],
+        prior_allocations: Sequence[ResearchAllocation],
         config: ResearchBudgetConfig,
         *,
         cycle_as_of: str,
@@ -1232,6 +1322,16 @@ class ResearchBudgetAllocator:
             raise ValueError("research slot counts must be non-negative")
 
         cycle_dt = _parse_utc(cycle_as_of)
+        for prior in prior_allocations:
+            if _parse_utc(prior.as_of) >= cycle_dt:
+                raise ValueError("prior research allocation must be strictly earlier")
+
+        prior_by_theme: dict[str, list[ResearchAllocation]] = {}
+        for prior in prior_allocations:
+            prior_by_theme.setdefault(prior.theme_id, []).append(prior)
+        for history in prior_by_theme.values():
+            history.sort(key=lambda item: _parse_utc(item.as_of))
+
         state: dict[str, dict[str, object]] = {}
 
         for scan in scan_results:
@@ -1241,11 +1341,28 @@ class ResearchBudgetAllocator:
             definition = registry_state.get(scan.theme_id)
             if definition is None:
                 reasons.append("theme not registered")
+            penalty_cycles = 0
+            for prior in reversed(prior_by_theme.get(scan.theme_id, [])):
+                if prior.tier is ResearchTier.SCAN_ONLY:
+                    break
+                if prior.scan_novelty_score is None or prior.scan_novelty_score >= config.novelty_floor:
+                    break
+                penalty_cycles += 1
+            decay = min(
+                config.repeated_no_change_penalty_cap,
+                config.repeated_no_change_penalty_per_cycle * penalty_cycles,
+            )
+            effective_priority = (
+                scan.research_priority
+                if scan.forced_review
+                else max(0.0, scan.research_priority - decay)
+            )
             state[scan.theme_id] = {
                 "scan": scan,
                 "definition": definition,
                 "tier": ResearchTier.SCAN_ONLY,
                 "reasons": reasons,
+                "effective_priority": effective_priority,
             }
 
         theme_used = 0
@@ -1259,7 +1376,7 @@ class ResearchBudgetAllocator:
         forced.sort(
             key=lambda item: (
                 -item["scan"].forced_review_severity,
-                -item["scan"].research_priority,
+                -item["effective_priority"],
                 -item["scan"].evidence_confidence,
                 item["scan"].theme_id,
             )
@@ -1300,7 +1417,7 @@ class ResearchBudgetAllocator:
 
         ordinary.sort(
             key=lambda item: (
-                -item["scan"].research_priority,
+                -item["effective_priority"],
                 -item["scan"].evidence_confidence,
                 item["scan"].theme_id,
             )
@@ -1313,7 +1430,7 @@ class ResearchBudgetAllocator:
                 continue
             if (
                 full_used < config.full_decision_slots
-                and scan.research_priority >= config.full_priority_gate
+                and item["effective_priority"] >= config.full_priority_gate
                 and scan.novelty_score is not None
                 and scan.novelty_score >= config.full_novelty_gate
             ):
@@ -1338,7 +1455,9 @@ class ResearchBudgetAllocator:
                 theme_id=item["scan"].theme_id,
                 as_of=cycle_as_of,
                 tier=item["tier"],
-                priority=item["scan"].research_priority,
+                scan_priority=item["scan"].research_priority,
+                effective_priority=item["effective_priority"],
+                scan_novelty_score=item["scan"].novelty_score,
                 forced_review=item["scan"].forced_review,
                 allocation_reasons=tuple(item["reasons"]),
                 source_scan_result_hash=canonical_hash(asdict(item["scan"])),
@@ -1355,7 +1474,7 @@ class ResearchBudgetAllocator:
             key=lambda item: (
                 tier_rank[item.tier],
                 -int(item.forced_review),
-                -item.priority,
+                -item.effective_priority,
                 item.theme_id,
             ),
         )
@@ -1399,7 +1518,7 @@ Implementation rules:
     key = (
         tier_rank[item.tier],
         -int(item.forced_review),
-        -item.priority,
+        -item.effective_priority,
         item.theme_id,
     )
     ```
@@ -1514,6 +1633,9 @@ def test_research_budget_default_config_matches_approved_capacity_contract():
     assert config.confidence_floor == 0.45
     assert config.full_priority_gate == 0.65
     assert config.full_novelty_gate == 0.35
+    assert config.novelty_floor == 0.20
+    assert config.repeated_no_change_penalty_per_cycle == 0.10
+    assert config.repeated_no_change_penalty_cap == 0.30
 
 
 def test_research_budget_interfaces_are_publicly_importable():
@@ -1588,6 +1710,9 @@ minimum_independent_sources: 1
 confidence_floor: 0.45
 full_priority_gate: 0.65
 full_novelty_gate: 0.35
+novelty_floor: 0.20
+repeated_no_change_penalty_per_cycle: 0.10
+repeated_no_change_penalty_cap: 0.30
 ```
 
 - [ ] **Step 5: Export public interfaces**
