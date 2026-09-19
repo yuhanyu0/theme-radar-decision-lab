@@ -1,0 +1,23 @@
+version: "1.0"
+
+theme:
+  theme_id: Genomics_Bio
+  display_name: Genomics and Biotechnology
+  aliases: [Genomics, GenomicsBio]
+  lifecycle_state: strengthening
+  discovered_at: "2026-09-18"
+  effective_from: "2026-09-18"
+  thesis_summary: "Genomics and biotechnology migration spanning editing therapeutics, delivery, sequencing tools and genomic diagnostics."
+  economic_chain_description: "Editing therapeutics -> gene-therapy delivery -> sequencing/enabling tools -> genomic diagnostics."
+  benchmark_stack: [SPY, XLV, XBI]
+  provenance:
+    - "theme-radar-log@7c2cd95fcdd0e12770928857bfc41a85b4f98928"
+  version: "1"
+
+universe_source: ../genomics_bio_seed.example.yaml
+evidence_adapter: biotech_clinical
+
+# Research/watch only until a separate calibration task establishes evidence-backed gates.
+theme_key_policy:
+  calibration_state: uncalibrated
+  minimum_valid_sessions: 3

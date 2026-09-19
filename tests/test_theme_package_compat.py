@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from decision_lab.themes import load_theme_package
+from decision_lab.themes import ThemeCalibrationState, load_theme_package
 from decision_lab.universe import ThemeUniverse
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,9 +31,11 @@ def test_datacenter_loads_as_generic_theme_package_without_semantic_universe_dri
 
 def test_datacenter_thresholds_are_package_local():
     package = load_theme_package(ROOT / "config/themes/datacenter_infra.yaml")
+    assert package.theme_key_policy.calibration_state is ThemeCalibrationState.OPERATIONAL
     assert package.theme_key_policy.minimum_flow == 0.50
     assert package.theme_key_policy.probe_structure == 0.08
     assert package.theme_key_policy.full_structure == 0.35
+    assert package.theme_key_policy.minimum_valid_sessions == 2
 
 
 def test_candidate_effective_time_survives_package_loading():
@@ -60,6 +62,7 @@ def test_new_market_wide_interfaces_are_publicly_importable():
     assert decision_lab.ThemeRegistry is not None
     assert decision_lab.ThemePackage is not None
     assert decision_lab.ThemeKeyPolicy is not None
+    assert decision_lab.ThemeCalibrationState is not None
     assert decision_lab.GenericEvidenceAdapter is not None
     assert decision_lab.IndustrialsInfrastructureAdapter is not None
     assert decision_lab.HierarchicalControlSpec is not None

@@ -1,0 +1,11 @@
+version: "1.0"
+adapter: biotech_clinical
+expected_raw_fields:
+  - clinical_phase
+  - endpoint_status
+  - regulatory_state
+  - cash_runway_months
+  - days_to_material_catalyst
+  - platform_validation
+  - partnered_economics
+notes: "Clinical/regulatory facts retain domain semantics. They are not mapped to industrial backlog/demand fields."

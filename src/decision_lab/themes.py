@@ -20,6 +20,12 @@ class ThemeLifecycleState(str, Enum):
     RETIRED = "retired"
 
 
+class ThemeCalibrationState(str, Enum):
+    UNCALIBRATED = "uncalibrated"
+    OPERATIONAL = "operational"
+    VALIDATED = "validated"
+
+
 @dataclass(frozen=True)
 class ThemeDefinition:
     theme_id: str
@@ -57,6 +63,7 @@ class ThemeKeyEvaluation:
 
 @dataclass(frozen=True)
 class ThemeKeyPolicy:
+    calibration_state: ThemeCalibrationState = ThemeCalibrationState.UNCALIBRATED
     minimum_flow: float | None = None
     probe_structure: float | None = None
     full_structure: float | None = None
@@ -76,12 +83,39 @@ class ThemeKeyPolicy:
         carry: float | None = None,
         raw_calibrated_gap: float | None = None,
     ) -> ThemeKeyEvaluation:
+        if self.calibration_state not in (
+            ThemeCalibrationState.OPERATIONAL,
+            ThemeCalibrationState.VALIDATED,
+        ):
+            return ThemeKeyEvaluation(
+                satisfied=False,
+                permission=permission,
+                reasons=("theme key policy uncalibrated",),
+            )
+
+        required_structure = self.full_structure if permission == "full" else self.probe_structure
+        has_substantive_gate = any(
+            gate is not None
+            for gate in (
+                self.minimum_flow,
+                required_structure,
+                self.structure_percentile_min,
+                self.minimum_carry,
+                self.max_raw_calibrated_gap,
+            )
+        )
+        if not has_substantive_gate:
+            return ThemeKeyEvaluation(
+                satisfied=False,
+                permission=permission,
+                reasons=("theme key policy has no substantive evidence gate",),
+            )
+
         reasons: list[str] = []
         if valid_sessions < self.minimum_valid_sessions:
             reasons.append("insufficient valid sessions")
         if self.minimum_flow is not None and (flow is None or flow < self.minimum_flow):
             reasons.append("flow condition not satisfied")
-        required_structure = self.full_structure if permission == "full" else self.probe_structure
         if required_structure is not None and (
             structure is None or structure < required_structure
         ):
@@ -192,7 +226,11 @@ def load_theme_package(path: str | Path) -> ThemePackage:
     if universe.theme != definition.theme_id:
         raise ValueError("theme package definition and universe source disagree")
 
-    policy = ThemeKeyPolicy(**payload.get("theme_key_policy", {}))
+    policy_payload = dict(payload.get("theme_key_policy", {}))
+    policy_payload["calibration_state"] = ThemeCalibrationState(
+        policy_payload.get("calibration_state", "uncalibrated")
+    )
+    policy = ThemeKeyPolicy(**policy_payload)
     return ThemePackage(
         definition=definition,
         universe=universe,

@@ -1,6 +1,8 @@
 """Theme Radar Decision Lab core package."""
 
 from .adapters import (
+    BiotechClinicalAdapter,
+    BiotechClinicalEvidence,
     CompanyEvidenceAdapter,
     CompanyEvidenceInput,
     GenericEvidenceAdapter,
@@ -20,6 +22,7 @@ from .outcomes import evaluate_forward_outcomes, missed_upside, summarize_decisi
 from .playbooks import PlaybookRouting, route_playbooks
 from .tape import TapeAssessment, assess_tape_state
 from .themes import (
+    ThemeCalibrationState,
     ThemeDefinition,
     ThemeKeyEvaluation,
     ThemeKeyPolicy,
@@ -31,6 +34,8 @@ from .themes import (
 from .universe import Candidate, ThemeLayer, ThemeUniverse
 
 __all__ = [
+    "BiotechClinicalAdapter",
+    "BiotechClinicalEvidence",
     "Candidate",
     "CompanyEvidenceAdapter",
     "CompanyEvidenceInput",
@@ -43,6 +48,7 @@ __all__ = [
     "NormalizedCompanyEvidence",
     "PlaybookRouting",
     "TapeAssessment",
+    "ThemeCalibrationState",
     "ThemeDefinition",
     "ThemeKeyEvaluation",
     "ThemeKeyPolicy",

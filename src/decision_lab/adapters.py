@@ -38,6 +38,18 @@ class NormalizedCompanyEvidence:
     raw_facts: Mapping[str, RawFactValue] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class BiotechClinicalEvidence(NormalizedCompanyEvidence):
+    clinical_phase: str | None = None
+    endpoint_status: str | None = None
+    regulatory_state: str | None = None
+    cash_runway_months: float | None = None
+    days_to_material_catalyst: int | None = None
+    financing_risk: float | None = None
+    platform_validation: float | None = None
+    partnered_economics: float | None = None
+
+
 class CompanyEvidenceAdapter(Protocol):
     def normalize(self, source: CompanyEvidenceInput) -> NormalizedCompanyEvidence: ...
 
@@ -58,6 +70,10 @@ def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 class GenericEvidenceAdapter:
@@ -114,6 +130,43 @@ class IndustrialsInfrastructureAdapter:
             guidance_revision=_linear(guidance, midpoint=0.0, span=0.20),
             thesis_risk=None if concentration is None else _clip01(concentration),
             source_coverage="industrials_core",
+            provenance=source.provenance,
+            raw_facts=dict(facts),
+        )
+
+
+class BiotechClinicalAdapter:
+    """Normalize biotech evidence without pretending clinical facts are industrial demand."""
+
+    def normalize(self, source: CompanyEvidenceInput) -> BiotechClinicalEvidence:
+        facts = source.raw_facts
+        cash_runway = _number(facts.get("cash_runway_months"))
+        catalyst_days = _number(facts.get("days_to_material_catalyst"))
+        platform_validation = _number(facts.get("platform_validation"))
+        partnered_economics = _number(facts.get("partnered_economics"))
+
+        financing_risk = (
+            None if cash_runway is None else _clip01((18.0 - cash_runway) / 18.0)
+        )
+
+        return BiotechClinicalEvidence(
+            ticker=source.ticker.upper(),
+            as_of=source.as_of,
+            clinical_phase=_text(facts.get("clinical_phase")),
+            endpoint_status=_text(facts.get("endpoint_status")),
+            regulatory_state=_text(facts.get("regulatory_state")),
+            cash_runway_months=cash_runway,
+            days_to_material_catalyst=(
+                None if catalyst_days is None else int(catalyst_days)
+            ),
+            financing_risk=financing_risk,
+            platform_validation=(
+                None if platform_validation is None else _clip01(platform_validation)
+            ),
+            partnered_economics=(
+                None if partnered_economics is None else _clip01(partnered_economics)
+            ),
+            source_coverage="biotech_clinical_core",
             provenance=source.provenance,
             raw_facts=dict(facts),
         )
