@@ -598,3 +598,53 @@ def test_scan_result_preserves_source_ref_when_evidence_refs_are_empty():
     )[0]
 
     assert "market:bare-source" in result.evidence_refs
+
+
+
+def test_model_deterioration_with_unrelated_independent_signal_cannot_force_review():
+    radar = _obs(
+        source_type="radar_model_output",
+        source_ref="radar:low-persistence",
+        independent=False,
+        persistence=0.10,
+        breadth=0.10,
+        structure=0.40,
+    )
+    independent_discovery_only = ThemeScanObservation(
+        theme_id="DataCenter_Infra",
+        as_of="2026-09-19",
+        source_type="market_data",
+        source_ref="market:discovery-only",
+        discovery_signal=0.80,
+        support_direction=SupportDirection.SUPPORTING,
+        is_independent=True,
+        observed_or_inferred="observed",
+    )
+
+    result = rank_themes(
+        [radar, independent_discovery_only],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert result.lifecycle_recommendation == "weakening"
+    assert not result.forced_review
+
+
+def test_unknown_source_type_is_rejected_before_it_can_count_as_independent():
+    bad = _obs(
+        source_type="unknown_source_type",
+        source_ref="unknown:source",
+        independent=True,
+    )
+
+    with pytest.raises(ValueError, match="unsupported source_type"):
+        rank_themes(
+            [bad],
+            _registry(),
+            (),
+            ScannerConfig(),
+            cycle_as_of="2026-09-19",
+        )
