@@ -223,7 +223,11 @@ def load_theme_package(path: str | Path) -> ThemePackage:
     if universe.theme != definition.theme_id:
         raise ValueError("theme package definition and universe source disagree")
 
-    policy = ThemeKeyPolicy(**payload.get("theme_key_policy", {}))
+    policy_payload = dict(payload.get("theme_key_policy", {}))
+    policy_payload["calibration_state"] = ThemeCalibrationState(
+        policy_payload.get("calibration_state", "uncalibrated")
+    )
+    policy = ThemeKeyPolicy(**policy_payload)
     return ThemePackage(
         definition=definition,
         universe=universe,
