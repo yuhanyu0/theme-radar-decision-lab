@@ -17,11 +17,7 @@ theme:
 universe_source: ../genomics_bio_seed.example.yaml
 evidence_adapter: biotech_clinical
 
-# Provisional relative policy. Absolute DataCenter thresholds are intentionally
-# absent. Missing structure percentile keeps permission closed.
+# Research/watch only until a separate calibration task establishes evidence-backed gates.
 theme_key_policy:
-  minimum_flow: null
-  probe_structure: null
-  full_structure: null
-  structure_percentile_min: 0.80
+  calibration_state: uncalibrated
   minimum_valid_sessions: 3
