@@ -527,3 +527,74 @@ def test_scanner_interfaces_are_publicly_importable():
     assert decision_lab.SupportDirection is not None
     assert decision_lab.rank_themes is not None
     assert decision_lab.load_scanner_config is not None
+
+
+
+def test_model_only_lifecycle_deterioration_cannot_force_review():
+    radar_only = _obs(
+        source_type="radar_model_output",
+        source_ref="radar:deterioration",
+        independent=False,
+        persistence=0.10,
+        breadth=0.10,
+        structure=0.40,
+        novelty=0.70,
+    )
+
+    result = rank_themes(
+        [radar_only],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert result.lifecycle_recommendation == "weakening"
+    assert not result.forced_review
+
+
+def test_conflicting_metadata_for_same_source_ref_is_rejected():
+    observations = [
+        _obs(
+            source_type="radar_model_output",
+            source_ref="shared:source",
+            independent=False,
+        ),
+        _obs(
+            source_type="market_data",
+            source_ref="shared:source",
+            independent=True,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="conflicting source metadata"):
+        rank_themes(
+            observations,
+            _registry(),
+            (),
+            ScannerConfig(),
+            cycle_as_of="2026-09-19",
+        )
+
+
+def test_scan_result_preserves_source_ref_when_evidence_refs_are_empty():
+    observation = ThemeScanObservation(
+        theme_id="DataCenter_Infra",
+        as_of="2026-09-19",
+        source_type="market_data",
+        source_ref="market:bare-source",
+        discovery_signal=0.7,
+        support_direction=SupportDirection.SUPPORTING,
+        is_independent=True,
+        observed_or_inferred="observed",
+    )
+
+    result = rank_themes(
+        [observation],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert "market:bare-source" in result.evidence_refs
