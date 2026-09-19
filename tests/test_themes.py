@@ -165,3 +165,37 @@ def test_theme_key_policy_requires_all_configured_inputs():
     assert not policy.evaluate(flow=0.52, structure=None, valid_sessions=2, permission="probe").satisfied
     assert not policy.evaluate(flow=0.52, structure=0.10, valid_sessions=1, permission="probe").satisfied
     assert policy.evaluate(flow=0.52, structure=0.36, valid_sessions=2, permission="full").satisfied
+
+
+def test_non_operational_string_calibration_state_cannot_bypass_fail_closed():
+    policy = ThemeKeyPolicy(
+        calibration_state="uncalibrated",
+        minimum_flow=0.50,
+    )
+
+    result = policy.evaluate(
+        flow=1.0,
+        structure=None,
+        valid_sessions=10,
+        permission="probe",
+    )
+
+    assert not result.satisfied
+    assert result.reasons == ("theme key policy uncalibrated",)
+
+
+def test_unknown_calibration_state_fails_closed_even_with_satisfied_gate():
+    policy = ThemeKeyPolicy(
+        calibration_state="typo_state",
+        minimum_flow=0.50,
+    )
+
+    result = policy.evaluate(
+        flow=1.0,
+        structure=None,
+        valid_sessions=10,
+        permission="probe",
+    )
+
+    assert not result.satisfied
+    assert result.reasons == ("theme key policy uncalibrated",)
