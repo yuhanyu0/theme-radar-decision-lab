@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from copy import deepcopy
 
 import pytest
@@ -499,3 +501,30 @@ def test_scanner_output_order_is_deterministic_for_equal_inputs():
 
     assert [item.theme_id for item in first] == ["A_Theme", "Z_Theme"]
     assert first == second
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_world_scanner_default_config_matches_approved_uncalibrated_defaults():
+    from decision_lab.scanner import load_scanner_config
+
+    config = load_scanner_config(ROOT / "config/scanner/world_scanner_defaults.yaml")
+
+    assert config.version == "0.1"
+    assert config.calibration_label == "uncalibrated"
+    assert config.stale_after_days == 5
+    assert config.component_weights["discovery"] == 0.15
+    assert config.component_weights["structural"] == 0.20
+    assert config.hard_contradiction_ratio == 0.50
+
+
+def test_scanner_interfaces_are_publicly_importable():
+    import decision_lab
+
+    assert decision_lab.ThemeScanObservation is not None
+    assert decision_lab.ThemeScanResult is not None
+    assert decision_lab.ScannerConfig is not None
+    assert decision_lab.SupportDirection is not None
+    assert decision_lab.rank_themes is not None
+    assert decision_lab.load_scanner_config is not None
