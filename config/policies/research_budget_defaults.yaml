@@ -1,0 +1,11 @@
+version: "0.1"
+calibration_label: uncalibrated
+theme_research_slots: 8
+full_decision_slots: 3
+minimum_independent_sources: 1
+confidence_floor: 0.45
+full_priority_gate: 0.65
+full_novelty_gate: 0.35
+novelty_floor: 0.20
+repeated_no_change_penalty_per_cycle: 0.10
+repeated_no_change_penalty_cap: 0.30
