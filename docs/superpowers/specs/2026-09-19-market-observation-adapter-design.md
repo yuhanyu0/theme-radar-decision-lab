@@ -127,24 +127,31 @@ Existing modules should remain unchanged except for narrow public exports in src
 
 ### 6.1 MarketBar
 
-A provider-neutral close-price record:
+A provider-neutral daily close record:
 
     MarketBar
       symbol: str
-      timestamp: str
+      session_date: str
+      available_at: str
       close: float
+
+session_date is the explicit YYYY-MM-DD trading-session identifier after provider-specific ingestion has normalized its timestamp. available_at is the ISO 8601 time at which this bar is considered knowable to the research system.
 
 Rules:
 
 - symbol is normalized to uppercase;
-- timestamp must parse as ISO 8601;
-- naive timestamps are interpreted as UTC, matching existing scanner conventions;
+- session_date must parse as an ISO date;
+- available_at must parse as ISO 8601;
+- naive available_at values are interpreted as UTC, matching existing scanner conventions;
 - close must be finite and strictly positive;
-- duplicate (symbol, timestamp) rows are rejected, even if values match;
-- a bar later than cycle_as_of is rejected as potential look-ahead;
+- duplicate (symbol, session_date) rows are rejected for semantically used symbols, even if values match;
+- a semantically used bar with available_at later than cycle_as_of is rejected as potential look-ahead;
+- date-only cycle_as_of means end-of-day UTC, matching the scanner convention;
 - input ordering must not affect results.
 
-Version 0.1 uses closes only.
+Separating session_date from available_at prevents provider timestamp conventions from silently changing effective-membership dates or look-ahead semantics.
+
+Version 0.1 uses daily closes only.
 
 Open/high/low/volume can be added later if a specific scanner feature requires them.
 
@@ -246,10 +253,11 @@ They are not probabilities, trading thresholds, ThemeKey thresholds, or claims a
 
 The declared benchmark defines the session calendar.
 
-Given benchmark closes up to cycle_as_of:
+Given benchmark closes available by cycle_as_of:
 
-1. sort benchmark bars by timestamp;
-2. take the latest benchmark session at or before cycle_as_of as market_as_of;
+1. sort benchmark bars by session_date;
+2. reject any required benchmark bar whose available_at exceeds cycle_as_of;
+3. take the latest available benchmark session_date as market_as_of;
 3. require enough sessions for current and prior windows;
 4. current window start is current_return_sessions intervals before market_as_of;
 5. prior window end equals current window start;
@@ -443,6 +451,7 @@ Fields:
     input_hash
     spec_hash
     config_hash
+    diagnostic_hash
 
     evidence_refs
     warnings
@@ -640,9 +649,9 @@ Validation:
 
 Candidate effective windows remain half-open:
 
-    effective_from <= date < effective_to
+    effective_from <= session_date < effective_to
 
-For full-window eligibility, the candidate must be effective across the entire requested window.
+For full-window eligibility, the candidate must be effective across the entire requested window. Membership checks use MarketBar.session_date and the existing Candidate.is_effective semantics; they never derive membership dates from available_at.
 
 A member with:
 
@@ -687,36 +696,53 @@ Insufficient benchmark history makes the entire batch unable to compute windows:
 
 Hash only semantically used inputs.
 
-### 20.1 Used-bar hash
+The adapter first determines the required symbol set from the benchmark, declared proxies, and eligible theme members. Bars for unrelated symbols are ignored before source-level duplicate/future checks and do not affect output or hashes.
 
-For each source/diagnostic:
+### 20.1 Source-level used-bar hash
 
-1. select only benchmark + used member/proxy bars;
-2. normalize symbols/timestamps;
-3. sort by (symbol, timestamp);
-4. serialize close values deterministically;
+For each basket/proxy diagnostic:
+
+1. select only benchmark + actually used member/proxy bars;
+2. normalize symbols, session_date, and available_at;
+3. sort by (symbol, session_date);
+4. serialize session_date, available_at, and close deterministically;
 5. hash with canonical_hash.
 
-Unrelated extra bars must not change the hash.
+This value is stored as MarketObservationDiagnostics.input_hash.
 
-### 20.2 Config/spec hashes
+Unrelated extra bars must not change this hash.
+
+### 20.2 Batch input hash
+
+MarketObservationBatch.input_hash is:
+
+    canonical_hash(sorted(source-level input hashes))
+
+Thus a proxy batch with multiple proxies has one stable aggregate hash while each diagnostic retains its own exact used-input hash.
+
+### 20.3 Config/spec hashes
 
     config_hash = canonical_hash(asdict(config))
     spec_hash = canonical_hash(asdict(spec))
 
-### 20.3 Diagnostic hash
+### 20.4 Diagnostic hash
 
-Hash the complete diagnostic object with its hash field omitted.
+MarketObservationDiagnostics includes:
+
+    diagnostic_hash
+
+Compute it from the complete diagnostic object with diagnostic_hash set to None.
 
 The resulting diagnostic reference is included in emitted observation evidence_refs.
 
 ## 21. Error handling
 
-Raise ValueError for malformed or logically contradictory inputs:
+Raise ValueError for malformed or logically contradictory semantically used inputs:
 
 - invalid/nonpositive/nonfinite close;
-- duplicate symbol/timestamp;
-- future-dated bar;
+- invalid session_date or available_at;
+- duplicate symbol/session_date;
+- required bar available after cycle_as_of;
 - theme mismatch;
 - duplicate proxies;
 - proxy equals benchmark;
@@ -797,44 +823,48 @@ Declared proxy fixture:
 
 Version 0.1 tests must prove:
 
-1. MarketBar validates symbol/timestamp/positive finite close.
-2. duplicate symbol/timestamp rows are rejected.
-3. future bars are rejected.
-4. input ordering does not affect output.
-5. extra unrelated symbols do not affect output/hash.
-6. theme mismatch is rejected.
-7. duplicate proxies are rejected.
-8. benchmark/proxy collision is rejected.
-9. insufficient benchmark history returns COVERAGE_PENDING.
-10. BASKET mode excludes members admitted after window start.
-11. BASKET mode respects effective_to.
-12. BASKET current return is equal-weight arithmetic member return.
-13. breadth is positive-member fraction.
-14. persistence is fraction of daily basket-vs-benchmark wins.
-15. current excess is basket return minus benchmark return.
-16. stable cohort, not current cohort, drives novelty.
-17. membership change is surfaced explicitly.
-18. insufficient stable cohort leaves novelty missing without invalidating current signals.
-19. DataCenter-style weak breadth + negative excess -> CONTRADICTING.
-20. strong basket excess + broad breadth -> SUPPORTING.
-21. otherwise basket direction -> NEUTRAL.
-22. PROXY breadth remains None.
-23. ARKG-style proxy -> SUPPORTING.
-24. XBI-style modest positive proxy -> NEUTRAL.
-25. negative weak proxy -> CONTRADICTING.
-26. one missing proxy does not suppress another valid proxy.
-27. all missing proxies emit no observations.
-28. output source_type is derived_feature.
-29. output is_independent is true.
-30. output observed_or_inferred is inferred.
-31. raw diagnostics are retained beside normalized signals.
-32. source_ref includes market_as_of and input hash prefix.
-33. evidence_refs include market source, diagnostic, package, universe, and proxy when applicable.
-34. scanner can consume emitted observations without special-case code.
-35. Genomics effective-date fixture cannot retroactively generate a five-session member basket.
-36. no ThemeRegistry/ThemeKey/Tape/router/ledger state is mutated.
-37. existing full regression remains green.
-38. changed-files Ruff passes.
+1. MarketBar validates symbol/session_date/available_at/positive finite close.
+2. duplicate symbol/session_date rows are rejected for used symbols.
+3. required bars available after cycle_as_of are rejected.
+4. session_date, not available_at, governs effective membership.
+5. date-only cycle_as_of uses end-of-day UTC.
+6. input ordering does not affect output.
+7. extra unrelated symbols do not affect output/hash.
+8. theme mismatch is rejected.
+9. duplicate proxies are rejected.
+10. benchmark/proxy collision is rejected.
+11. insufficient benchmark history returns COVERAGE_PENDING.
+12. BASKET mode excludes members admitted after window start.
+13. BASKET mode respects effective_to.
+14. BASKET current return is equal-weight arithmetic member return.
+15. breadth is positive-member fraction.
+16. persistence is fraction of daily basket-vs-benchmark wins.
+17. current excess is basket return minus benchmark return.
+18. stable cohort, not current cohort, drives novelty.
+19. membership change is surfaced explicitly.
+20. insufficient stable cohort leaves novelty missing without invalidating current signals.
+21. DataCenter-style weak breadth + negative excess -> CONTRADICTING.
+22. strong basket excess + broad breadth -> SUPPORTING.
+23. otherwise basket direction -> NEUTRAL.
+24. PROXY breadth remains None.
+25. ARKG-style proxy -> SUPPORTING.
+26. XBI-style modest positive proxy -> NEUTRAL.
+27. negative weak proxy -> CONTRADICTING.
+28. one missing proxy does not suppress another valid proxy.
+29. all missing proxies emit no observations.
+30. output source_type is derived_feature.
+31. output is_independent is true.
+32. output observed_or_inferred is inferred.
+33. raw diagnostics are retained beside normalized signals.
+34. per-source input hashes bind exact used bars.
+35. batch input hash aggregates source-level hashes deterministically.
+36. source_ref includes market_as_of and input hash prefix.
+37. evidence_refs include market source, diagnostic, package, universe, and proxy when applicable.
+38. scanner can consume emitted observations without special-case code.
+39. Genomics effective-date fixture cannot retroactively generate a five-session member basket.
+40. no ThemeRegistry/ThemeKey/Tape/router/ledger state is mutated.
+41. existing full regression remains green.
+42. changed-files Ruff passes.
 
 ## 25. Public repository safety
 
@@ -891,3 +921,23 @@ Deliberately deferred:
 - portfolio sizing/execution.
 
 Those should only be added after the provider-neutral adapter has accumulated replayable diagnostics and outcome evidence.
+
+
+## 28. Validation domains
+
+Configuration validation is explicit:
+
+- current_return_sessions >= 1;
+- prior_return_sessions >= 1;
+- min_basket_members >= 1;
+- relative_strength_scale > 0;
+- novelty_scale > 0;
+- breadth and persistence thresholds must lie in [0,1];
+- excess-return thresholds must be finite;
+- support thresholds must not make SUPPORTING and CONTRADICTING overlap under the same mode.
+
+MarketObservationStatus enum names are READY and COVERAGE_PENDING with serialized values ready and coverage_pending.
+
+MarketObservationMode enum names are BASKET and PROXY with serialized values basket and proxy.
+
+MarketObservationBatch.market_as_of is optional because a completely missing benchmark can fail before any market session is established.
