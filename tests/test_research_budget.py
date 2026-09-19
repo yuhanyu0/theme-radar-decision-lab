@@ -456,3 +456,20 @@ def test_research_budget_interfaces_are_publicly_importable():
     assert decision_lab.ResearchBudgetConfig is not None
     assert decision_lab.ResearchBudgetAllocator is not None
     assert decision_lab.load_research_budget_config is not None
+
+
+
+def test_duplicate_scan_results_for_same_theme_are_rejected():
+    scans = [
+        _scan("DataCenter_Infra", priority=0.90),
+        _scan("DataCenter_Infra", priority=0.20),
+    ]
+
+    with pytest.raises(ValueError, match="duplicate scan result for theme"):
+        ResearchBudgetAllocator().allocate(
+            scans,
+            _registry(),
+            (),
+            ResearchBudgetConfig(),
+            cycle_as_of="2026-09-19",
+        )
