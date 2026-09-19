@@ -116,6 +116,13 @@ def _parse_utc(value: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _parse_cycle_utc(value: str) -> datetime:
+    dt = _parse_utc(value)
+    if "T" not in value and " " not in value:
+        return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
+
+
 def _clip01(value: float) -> float:
     return min(1.0, max(0.0, float(value)))
 
@@ -299,7 +306,7 @@ def rank_themes(
     *,
     cycle_as_of: str,
 ) -> list[ThemeScanResult]:
-    cycle_dt = _parse_utc(cycle_as_of)
+    cycle_dt = _parse_cycle_utc(cycle_as_of)
     _ = prior_results
 
     by_theme: dict[str, list[ThemeScanObservation]] = {}
