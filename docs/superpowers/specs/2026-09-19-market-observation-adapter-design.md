@@ -339,12 +339,18 @@ Define the stable cohort as candidates that:
 - remain effective through current-window end;
 - have all required bars for both windows.
 
-Use this same stable cohort to compute stable prior and current basket returns and excess returns.
+Use this same stable cohort to compute:
+
+    comparison_current_excess_return
+    comparison_prior_excess_return
 
 Then:
 
     novelty_abs_excess_change =
-        abs(stable_current_excess_return - stable_prior_excess_return)
+        abs(
+            comparison_current_excess_return
+            - comparison_prior_excess_return
+        )
 
 If stable cohort size < min_basket_members:
 
@@ -374,7 +380,7 @@ For each proxy:
 
 1. use the same benchmark session windows;
 2. require proxy closes for every benchmark session needed;
-3. compute current proxy return, current benchmark return, current excess return, daily persistence, prior proxy excess return, and absolute change in excess return.
+3. compute current proxy return, current benchmark return, current excess return, daily persistence, comparison current excess return, comparison prior excess return, and absolute change in excess return. For a proxy, comparison current excess equals current excess because there is no membership-composition distinction.
 
 Breadth is not defined for a single proxy:
 
@@ -424,7 +430,8 @@ Fields:
     benchmark_current_return
     current_excess_return
 
-    prior_excess_return
+    comparison_current_excess_return
+    comparison_prior_excess_return
     novelty_abs_excess_change
 
     breadth
@@ -456,9 +463,17 @@ Fields:
     evidence_refs
     warnings
 
+For BASKET mode:
+- current_excess_return is computed from the current eligible cohort;
+- comparison_current_excess_return and comparison_prior_excess_return are both computed from the stable comparison cohort;
+- novelty_abs_excess_change is the absolute difference between the two comparison excess values;
+- therefore current_excess_return does not have to equal comparison_current_excess_return when membership_changed is true.
+
 For PROXY mode:
 - current/stable member fields are empty/zero;
-- membership_changed is false.
+- membership_changed is false;
+- comparison_current_excess_return equals current_excess_return;
+- comparison_prior_excess_return is the prior proxy excess return.
 
 For coverage-pending cases:
 - computable provenance/window fields remain populated;
@@ -856,15 +871,16 @@ Version 0.1 tests must prove:
 31. output is_independent is true.
 32. output observed_or_inferred is inferred.
 33. raw diagnostics are retained beside normalized signals.
-34. per-source input hashes bind exact used bars.
-35. batch input hash aggregates source-level hashes deterministically.
-36. source_ref includes market_as_of and input hash prefix.
-37. evidence_refs include market source, diagnostic, package, universe, and proxy when applicable.
-38. scanner can consume emitted observations without special-case code.
-39. Genomics effective-date fixture cannot retroactively generate a five-session member basket.
-40. no ThemeRegistry/ThemeKey/Tape/router/ledger state is mutated.
-41. existing full regression remains green.
-42. changed-files Ruff passes.
+34. current-cohort excess and stable-comparison excess are separately retained when basket membership changes.
+35. per-source input hashes bind exact used bars.
+36. batch input hash aggregates source-level hashes deterministically.
+37. source_ref includes market_as_of and input hash prefix.
+38. evidence_refs include market source, diagnostic, package, universe, and proxy when applicable.
+39. scanner can consume emitted observations without special-case code.
+40. Genomics effective-date fixture cannot retroactively generate a five-session member basket.
+41. no ThemeRegistry/ThemeKey/Tape/router/ledger state is mutated.
+42. existing full regression remains green.
+43. changed-files Ruff passes.
 
 ## 25. Public repository safety
 
