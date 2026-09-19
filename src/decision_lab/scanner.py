@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from statistics import mean
 from typing import Literal, Mapping, Sequence
+
+import yaml
 
 from .evidence import SourceType
 from .ledger import canonical_hash
@@ -72,6 +75,13 @@ class ScannerConfig:
     weakening_low_breadth_gate: float = 0.35
     hard_contradiction_ratio: float = 0.50
     dormant_no_support_cycles: int = 3
+
+
+
+def load_scanner_config(path: str | Path) -> ScannerConfig:
+    payload = dict(yaml.safe_load(Path(path).read_text()) or {})
+    payload["calibration_label"] = "uncalibrated"
+    return ScannerConfig(**payload)
 
 
 @dataclass(frozen=True)
