@@ -149,9 +149,15 @@ def _clip01(value: float) -> float:
     return min(1.0, max(0.0, float(value)))
 
 
-def _validate_observation(obs: ThemeScanObservation, cycle_dt: datetime) -> None:
+def _validate_observation(
+    obs: ThemeScanObservation,
+    cycle_dt: datetime,
+    config: ScannerConfig,
+) -> None:
     if _parse_utc(obs.as_of) > cycle_dt:
         raise ValueError("future-dated observation")
+    if str(obs.source_type) not in config.source_weights:
+        raise ValueError("unsupported source_type")
     if obs.source_type == "radar_model_output" and obs.is_independent:
         raise ValueError("radar_model_output cannot be independent")
     for name in (
@@ -174,6 +180,10 @@ def _collapse_sources(
     grouped: dict[str, list[ThemeScanObservation]] = {}
     for obs in observations:
         grouped.setdefault(obs.source_ref, []).append(obs)
+    for rows in grouped.values():
+        metadata = {(str(row.source_type), row.is_independent) for row in rows}
+        if len(metadata) != 1:
+            raise ValueError("conflicting source metadata")
     return grouped
 
 
@@ -331,8 +341,8 @@ def _forced_review(
     definition: ThemeDefinition | None,
     contradiction_ratio: float,
     independent_contradiction_count: int,
-    persistence_score: float | None,
-    breadth_score: float | None,
+    independent_persistence_score: float | None,
+    independent_breadth_score: float | None,
     config: ScannerConfig,
 ) -> tuple[bool, int, tuple[str, ...]]:
     reasons: list[str] = []
@@ -349,10 +359,10 @@ def _forced_review(
         definition is not None
         and definition.lifecycle_state
         in (ThemeLifecycleState.STRENGTHENING, ThemeLifecycleState.MATURE)
-        and persistence_score is not None
-        and breadth_score is not None
-        and persistence_score < config.weakening_low_persistence_gate
-        and breadth_score < config.weakening_low_breadth_gate
+        and independent_persistence_score is not None
+        and independent_breadth_score is not None
+        and independent_persistence_score < config.weakening_low_persistence_gate
+        and independent_breadth_score < config.weakening_low_breadth_gate
     ):
         reasons.append("lifecycle deterioration")
         severity = max(severity, 2)
@@ -429,7 +439,7 @@ def rank_themes(
 
     by_theme: dict[str, list[ThemeScanObservation]] = {}
     for obs in observations:
-        _validate_observation(obs, cycle_dt)
+        _validate_observation(obs, cycle_dt, config)
         by_theme.setdefault(obs.theme_id, []).append(obs)
 
     config_hash = canonical_hash(asdict(config))
@@ -479,12 +489,22 @@ def rank_themes(
 
         definition = registry_state.get(theme_id)
         theme_history = history.get(theme_id, [])
+        independent_persistence_score = _component_score(
+            independent_sources,
+            field_name="persistence_signal",
+            config=config,
+        )
+        independent_breadth_score = _component_score(
+            independent_sources,
+            field_name="breadth_signal",
+            config=config,
+        )
         forced_review, forced_severity, forced_reasons = _forced_review(
             definition=definition,
             contradiction_ratio=contradiction_ratio,
             independent_contradiction_count=independent_contradiction_count,
-            persistence_score=scores["persistence"],
-            breadth_score=scores["breadth"],
+            independent_persistence_score=independent_persistence_score,
+            independent_breadth_score=independent_breadth_score,
             config=config,
         )
         lifecycle = _lifecycle_recommendation(
@@ -498,7 +518,12 @@ def rank_themes(
             breadth_score=scores["breadth"],
             config=config,
         )
-        evidence_refs = tuple(sorted({ref for row in rows for ref in row.evidence_refs}))
+        evidence_refs = tuple(
+            sorted(
+                {row.source_ref for row in rows}
+                | {ref for row in rows for ref in row.evidence_refs}
+            )
+        )
         prior_refs = tuple(canonical_hash(asdict(item)) for item in theme_history)
 
         results.append(
