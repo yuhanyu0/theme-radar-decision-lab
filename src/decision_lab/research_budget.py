@@ -104,7 +104,11 @@ class ResearchBudgetAllocator:
             history.sort(key=lambda item: _parse_utc(item.as_of))
 
         state: dict[str, dict[str, object]] = {}
+        seen_themes: set[str] = set()
         for scan in scan_results:
+            if scan.theme_id in seen_themes:
+                raise ValueError(f"duplicate scan result for theme: {scan.theme_id}")
+            seen_themes.add(scan.theme_id)
             if _parse_utc(scan.as_of) > cycle_dt:
                 raise ValueError("future-dated scan result")
 
