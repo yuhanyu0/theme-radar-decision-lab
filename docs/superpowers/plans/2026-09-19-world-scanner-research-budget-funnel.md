@@ -260,6 +260,71 @@ def test_model_and_independent_sources_are_aggregated_but_counted_separately():
     assert 0.0 <= result.research_priority <= 1.0
 
 
+def test_independent_support_raises_priority_over_model_only_evidence():
+    radar = _obs(
+        source_type="radar_model_output",
+        source_ref="radar:run-1",
+        independent=False,
+        discovery=0.9,
+        structure=0.8,
+        persistence=0.8,
+        breadth=0.8,
+        relative_strength=0.8,
+        novelty=0.5,
+    )
+    independent = _obs(
+        source_type="market_data",
+        source_ref="market:breadth",
+        independent=True,
+        discovery=0.9,
+        structure=0.8,
+        persistence=0.8,
+        breadth=0.8,
+        relative_strength=0.8,
+        novelty=0.5,
+    )
+
+    model_only = rank_themes(
+        [radar],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19T23:59:59+00:00",
+    )[0]
+    corroborated = rank_themes(
+        [radar, independent],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19T23:59:59+00:00",
+    )[0]
+
+    assert model_only.independent_support_count == 0
+    assert corroborated.independent_support_count == 1
+    assert corroborated.evidence_confidence > model_only.evidence_confidence
+    assert corroborated.research_priority > model_only.research_priority
+
+
+def test_stale_independent_evidence_lowers_confidence_and_priority():
+    fresh = rank_themes(
+        [_obs(as_of="2026-09-19", source_ref="market:fresh")],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+    stale = rank_themes(
+        [_obs(as_of="2026-09-09", source_ref="market:stale")],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert stale.evidence_confidence < fresh.evidence_confidence
+    assert stale.research_priority < fresh.research_priority
+
+
 def test_scanner_does_not_mutate_registry_state():
     registry = _registry()
     before = deepcopy(registry)
@@ -468,7 +533,7 @@ repeated_no_change_penalty = 0.0
 
 Compute weighted mean across non-`None` positive components. If none exist, `base_priority = 0.0`.
 
-Compute contradiction/staleness penalty and final priority exactly per spec. Use `canonical_hash(asdict(config))` for `config_hash`.
+Treat an observation as stale when its normalized age is strictly greater than `config.stale_after_days`. Compute `stale_ratio = stale_observation_count / max(1, total_observation_count)` across all observations for the theme. Compute contradiction/staleness penalty and final priority exactly per spec. Use `canonical_hash(asdict(config))` for `config_hash`.
 
 Return results sorted by:
 
@@ -1017,6 +1082,50 @@ def test_uncalibrated_themekey_does_not_block_research_or_become_satisfied():
     assert not theme_key.satisfied
 
 
+def test_stale_scanner_confidence_can_block_ordinary_promotion():
+    from decision_lab.scanner import (
+        ScannerConfig,
+        SupportDirection,
+        ThemeScanObservation,
+        rank_themes,
+    )
+
+    stale_observation = ThemeScanObservation(
+        theme_id="DataCenter_Infra",
+        as_of="2026-09-09",
+        source_type="market_data",
+        source_ref="market:stale",
+        discovery_signal=0.9,
+        structure_signal=0.9,
+        persistence_signal=0.9,
+        breadth_signal=0.9,
+        relative_strength_signal=0.9,
+        novelty_signal=0.9,
+        support_direction=SupportDirection.SUPPORTING,
+        evidence_refs=("market:stale",),
+        is_independent=True,
+        observed_or_inferred="observed",
+    )
+    stale_scan = rank_themes(
+        [stale_observation],
+        _registry(),
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    allocation = ResearchBudgetAllocator().allocate(
+        [stale_scan],
+        _registry(),
+        ResearchBudgetConfig(),
+        cycle_as_of="2026-09-19",
+    )[0]
+
+    assert stale_scan.evidence_confidence < ResearchBudgetConfig().confidence_floor
+    assert allocation.tier is ResearchTier.SCAN_ONLY
+    assert "evidence confidence below floor" in allocation.allocation_reasons
+
+
 def test_allocator_tie_break_is_deterministic():
     registry = {
         name: ThemeDefinition(
@@ -1119,8 +1228,140 @@ class ResearchBudgetAllocator:
         *,
         cycle_as_of: str,
     ) -> list[ResearchAllocation]:
-        ...
+        if config.theme_research_slots < 0 or config.full_decision_slots < 0:
+            raise ValueError("research slot counts must be non-negative")
+
+        cycle_dt = _parse_utc(cycle_as_of)
+        state: dict[str, dict[str, object]] = {}
+
+        for scan in scan_results:
+            if _parse_utc(scan.as_of) > cycle_dt:
+                raise ValueError("future-dated scan result")
+            reasons: list[str] = []
+            definition = registry_state.get(scan.theme_id)
+            if definition is None:
+                reasons.append("theme not registered")
+            state[scan.theme_id] = {
+                "scan": scan,
+                "definition": definition,
+                "tier": ResearchTier.SCAN_ONLY,
+                "reasons": reasons,
+            }
+
+        theme_used = 0
+        full_used = 0
+
+        forced = [
+            item
+            for item in state.values()
+            if item["definition"] is not None and item["scan"].forced_review
+        ]
+        forced.sort(
+            key=lambda item: (
+                -item["scan"].forced_review_severity,
+                -item["scan"].research_priority,
+                -item["scan"].evidence_confidence,
+                item["scan"].theme_id,
+            )
+        )
+
+        for item in forced:
+            if theme_used >= config.theme_research_slots or full_used >= config.full_decision_slots:
+                item["reasons"].append("forced review capacity exhausted")
+                continue
+            item["tier"] = ResearchTier.FULL_DECISION_RESEARCH
+            item["reasons"].extend(item["scan"].forced_review_reasons)
+            theme_used += 1
+            full_used += 1
+
+        ordinary: list[dict[str, object]] = []
+        for item in state.values():
+            scan = item["scan"]
+            definition = item["definition"]
+            if item["tier"] is ResearchTier.FULL_DECISION_RESEARCH:
+                continue
+            if scan.forced_review:
+                continue
+            if definition is None:
+                continue
+            if definition.lifecycle_state is not ThemeLifecycleState.STRENGTHENING:
+                item["reasons"].append("theme lifecycle not strengthening")
+                continue
+            if scan.independent_support_count < config.minimum_independent_sources:
+                item["reasons"].append("independent corroboration missing")
+                continue
+            if scan.independent_contradiction_count > 0:
+                item["reasons"].append("independent contradiction unresolved")
+                continue
+            if scan.evidence_confidence < config.confidence_floor:
+                item["reasons"].append("evidence confidence below floor")
+                continue
+            ordinary.append(item)
+
+        ordinary.sort(
+            key=lambda item: (
+                -item["scan"].research_priority,
+                -item["scan"].evidence_confidence,
+                item["scan"].theme_id,
+            )
+        )
+
+        for item in ordinary:
+            scan = item["scan"]
+            if theme_used >= config.theme_research_slots:
+                item["reasons"].append("research capacity exhausted")
+                continue
+            if (
+                full_used < config.full_decision_slots
+                and scan.research_priority >= config.full_priority_gate
+                and scan.novelty_score is not None
+                and scan.novelty_score >= config.full_novelty_gate
+            ):
+                item["tier"] = ResearchTier.FULL_DECISION_RESEARCH
+                item["reasons"].append("full research gates satisfied")
+                theme_used += 1
+                full_used += 1
+
+        for item in ordinary:
+            if item["tier"] is ResearchTier.FULL_DECISION_RESEARCH:
+                continue
+            if theme_used >= config.theme_research_slots:
+                if "research capacity exhausted" not in item["reasons"]:
+                    item["reasons"].append("research capacity exhausted")
+                continue
+            item["tier"] = ResearchTier.THEME_RESEARCH
+            item["reasons"].append("theme research gates satisfied")
+            theme_used += 1
+
+        allocations = [
+            ResearchAllocation(
+                theme_id=item["scan"].theme_id,
+                as_of=cycle_as_of,
+                tier=item["tier"],
+                priority=item["scan"].research_priority,
+                forced_review=item["scan"].forced_review,
+                allocation_reasons=tuple(item["reasons"]),
+                source_scan_result_hash=canonical_hash(asdict(item["scan"])),
+            )
+            for item in state.values()
+        ]
+        tier_rank = {
+            ResearchTier.FULL_DECISION_RESEARCH: 0,
+            ResearchTier.THEME_RESEARCH: 1,
+            ResearchTier.SCAN_ONLY: 2,
+        }
+        return sorted(
+            allocations,
+            key=lambda item: (
+                tier_rank[item.tier],
+                -int(item.forced_review),
+                -item.priority,
+                item.theme_id,
+            ),
+        )
 ```
+
+Add a local `_parse_utc` helper in this module with the same normalization semantics as scanner.py. Do not import scanner.py's private helper.
 
 Implementation rules:
 
