@@ -551,7 +551,6 @@ lifecycle_recommendation = "no_change"
 forced_review = False
 forced_review_severity = 0
 forced_review_reasons = ()
-repeated_no_change_penalty = 0.0
 ```
 
 Compute weighted mean across non-`None` positive components. If none exist, `base_priority = 0.0`.
@@ -561,7 +560,7 @@ Treat an observation as stale when its normalized age is strictly greater than `
 Return results sorted by:
 
 ```python
-(-research_priority, -evidence_confidence, theme_id)
+(-effective_priority, -evidence_confidence, theme_id)
 ```
 
 Task 2 will extend lifecycle/history/forced-review ordering.
@@ -1257,6 +1256,7 @@ Create `src/decision_lab/research_budget.py`:
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -1264,7 +1264,7 @@ from typing import Mapping, Sequence
 import yaml
 
 from .ledger import canonical_hash
-from .scanner import ThemeScanResult, _parse_utc
+from .scanner import ThemeScanResult
 from .themes import ThemeDefinition, ThemeLifecycleState
 
 
@@ -1306,6 +1306,13 @@ def load_research_budget_config(path: str | Path) -> ResearchBudgetConfig:
     payload = dict(yaml.safe_load(Path(path).read_text()))
     payload["calibration_label"] = "uncalibrated"
     return ResearchBudgetConfig(**payload)
+
+
+def _parse_utc(value: str) -> datetime:
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class ResearchBudgetAllocator:
@@ -1480,7 +1487,7 @@ class ResearchBudgetAllocator:
         )
 ```
 
-Add a local `_parse_utc` helper in this module with the same normalization semantics as scanner.py. Do not import scanner.py's private helper.
+The local `_parse_utc` helper intentionally duplicates the tiny normalization boundary rather than importing scanner.py's private helper.
 
 Implementation rules:
 
@@ -1493,12 +1500,12 @@ Implementation rules:
 7. Build forced candidates only from known themes with `forced_review=True`.
 8. Sort forced candidates by:
    ```python
-   (-forced_review_severity, -research_priority, -evidence_confidence, theme_id)
+   (-forced_review_severity, -effective_priority, -evidence_confidence, theme_id)
    ```
 9. Admit forced candidates into FULL while both theme/full slots remain.
 10. Ordinary full candidates are eligible if:
     - ordinary theme eligibility passes;
-    - priority >= full_priority_gate;
+    - effective_priority >= full_priority_gate;
     - novelty is not None and novelty >= full_novelty_gate.
 11. Sort ordinary candidates by:
     ```python
