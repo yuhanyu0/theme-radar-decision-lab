@@ -20,6 +20,12 @@ class ThemeLifecycleState(str, Enum):
     RETIRED = "retired"
 
 
+class ThemeCalibrationState(str, Enum):
+    UNCALIBRATED = "uncalibrated"
+    OPERATIONAL = "operational"
+    VALIDATED = "validated"
+
+
 @dataclass(frozen=True)
 class ThemeDefinition:
     theme_id: str
@@ -57,6 +63,7 @@ class ThemeKeyEvaluation:
 
 @dataclass(frozen=True)
 class ThemeKeyPolicy:
+    calibration_state: ThemeCalibrationState = ThemeCalibrationState.UNCALIBRATED
     minimum_flow: float | None = None
     probe_structure: float | None = None
     full_structure: float | None = None
@@ -76,12 +83,36 @@ class ThemeKeyPolicy:
         carry: float | None = None,
         raw_calibrated_gap: float | None = None,
     ) -> ThemeKeyEvaluation:
+        if self.calibration_state is ThemeCalibrationState.UNCALIBRATED:
+            return ThemeKeyEvaluation(
+                satisfied=False,
+                permission=permission,
+                reasons=("theme key policy uncalibrated",),
+            )
+
+        required_structure = self.full_structure if permission == "full" else self.probe_structure
+        has_substantive_gate = any(
+            gate is not None
+            for gate in (
+                self.minimum_flow,
+                required_structure,
+                self.structure_percentile_min,
+                self.minimum_carry,
+                self.max_raw_calibrated_gap,
+            )
+        )
+        if not has_substantive_gate:
+            return ThemeKeyEvaluation(
+                satisfied=False,
+                permission=permission,
+                reasons=("theme key policy has no substantive evidence gate",),
+            )
+
         reasons: list[str] = []
         if valid_sessions < self.minimum_valid_sessions:
             reasons.append("insufficient valid sessions")
         if self.minimum_flow is not None and (flow is None or flow < self.minimum_flow):
             reasons.append("flow condition not satisfied")
-        required_structure = self.full_structure if permission == "full" else self.probe_structure
         if required_structure is not None and (
             structure is None or structure < required_structure
         ):
