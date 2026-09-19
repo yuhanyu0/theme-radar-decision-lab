@@ -411,14 +411,12 @@ ThemeCalibrationState does not control research allocation. Therefore Genomics_B
 
 Some events must preempt ordinary top-N ranking.
 
-forced_review = true when at least one configured condition is met:
+Version 0.1 has two native forced-review detectors that are representable from ThemeScanObservation and current lifecycle state:
 
-- material contradiction against the prior thesis;
-- lifecycle deterioration crossing a configured severity threshold;
-- watched expression has a material Tape-state transition;
-- explicit invalidation evidence appears;
-- major divergence between model and independent evidence;
-- source-integrity/staleness failure makes a prior decision basis unreliable.
+- hard independent contradiction / major model-versus-independent divergence;
+- lifecycle deterioration crossing the configured severity threshold.
+
+Material Tape-state transitions, explicit ticker-level invalidation events, and source-integrity incidents require a separate external review-trigger input contract and are deferred from Increment 3. They must not be inferred from free-form notes.
 
 Forced review:
 
@@ -679,6 +677,7 @@ Deliberately deferred:
 - provider-specific industry taxonomies;
 - cross-theme overlap optimization;
 - automated scheduled execution;
+- external forced-review trigger inputs for material Tape transitions, explicit invalidation events, and source-integrity incidents;
 - value-of-information calibration;
 - portfolio sizing/execution.
 
