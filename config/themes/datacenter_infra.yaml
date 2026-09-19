@@ -17,6 +17,7 @@ universe_source: ../datacenter_seed.example.yaml
 evidence_adapter: industrials_infrastructure
 
 theme_key_policy:
+  calibration_state: operational
   minimum_flow: 0.50
   probe_structure: 0.08
   full_structure: 0.35
