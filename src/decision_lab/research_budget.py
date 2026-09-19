@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Mapping, Sequence
+
+import yaml
 
 from .ledger import canonical_hash
 from .scanner import ThemeScanResult
@@ -42,6 +45,13 @@ class ResearchBudgetConfig:
     novelty_floor: float = 0.20
     repeated_no_change_penalty_per_cycle: float = 0.10
     repeated_no_change_penalty_cap: float = 0.30
+
+
+
+def load_research_budget_config(path: str | Path) -> ResearchBudgetConfig:
+    payload = dict(yaml.safe_load(Path(path).read_text()) or {})
+    payload["calibration_label"] = "uncalibrated"
+    return ResearchBudgetConfig(**payload)
 
 
 def _parse_utc(value: str) -> datetime:
