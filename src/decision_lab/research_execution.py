@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import UTC, datetime
 from enum import Enum
 
 from .adapters import BiotechClinicalEvidence, NormalizedCompanyEvidence
+from .evidence import EvidenceRecord
 from .ledger import canonical_hash
 from .replay_archive import ReplayArchiveRecord
 from .replay_cohort import RoutingIntent, evaluate_replay_cohort
@@ -511,3 +512,304 @@ def build_research_work_order(
     )
     _validate_work_order_hash(order)
     return order
+
+
+
+class ResearchEvidenceDirection(str, Enum):
+    SUPPORTING = "SUPPORTING"
+    CONTRADICTING = "CONTRADICTING"
+    NEUTRAL = "NEUTRAL"
+
+
+@dataclass(frozen=True)
+class ResearchEvidenceInput:
+    evidence: EvidenceRecord
+    independent: bool
+    direction: ResearchEvidenceDirection
+    dimensions: tuple[str, ...]
+    target_ticker: str | None
+
+
+@dataclass(frozen=True)
+class FrozenResearchEvidence:
+    evidence_id: str
+    source_hash: str
+    payload_hash: str
+    observed_at: str
+    retrieved_at: str | None
+    market_asof: str | None
+    ticker: str | None
+    theme: str | None
+    source_type: str
+    source_ref: str
+    fact_type: str
+    is_observed_fact: bool
+    model_version: str | None
+    notes: str | None
+
+
+@dataclass(frozen=True)
+class ResearchEvidenceBinding:
+    evidence: FrozenResearchEvidence
+    independent: bool
+    direction: ResearchEvidenceDirection
+    dimensions: tuple[str, ...]
+    target_ticker: str | None
+
+
+class ResearchFindingKind(str, Enum):
+    OBSERVED_SYNTHESIS = "OBSERVED_SYNTHESIS"
+    INFERENCE = "INFERENCE"
+    UNRESOLVED = "UNRESOLVED"
+
+
+@dataclass(frozen=True)
+class ResearchFinding:
+    finding_id: str
+    kind: ResearchFindingKind
+    direction: ResearchEvidenceDirection | None
+    dimension: str
+    target_ticker: str | None
+    statement: str
+    evidence_source_hashes: tuple[str, ...]
+
+
+class ResearchExecutionClosure(str, Enum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+
+
+def _validate_evidence_record(record: EvidenceRecord) -> None:
+    digest = record.source_hash
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(ch not in "0123456789abcdef" for ch in digest)
+    ):
+        raise ValueError("invalid research evidence hash")
+    payload = asdict(record)
+    payload["source_hash"] = None
+    if canonical_hash(payload) != digest:
+        raise ValueError("invalid research evidence hash")
+
+
+def _freeze_evidence(
+    item: ResearchEvidenceInput,
+    *,
+    order: ResearchWorkOrder,
+    evidence_as_of: datetime,
+) -> ResearchEvidenceBinding:
+    evidence = item.evidence
+    _validate_evidence_record(evidence)
+    if not isinstance(item.independent, bool):
+        raise TypeError("independent must be bool")
+    if not isinstance(item.direction, ResearchEvidenceDirection):
+        raise TypeError("unsupported research evidence direction")
+    if (
+        item.independent
+        and (
+            evidence.source_type == "radar_model_output"
+            or not evidence.is_observed_fact
+        )
+    ):
+        raise ValueError(
+            "model or inferred evidence cannot be marked independent"
+        )
+
+    for value in (
+        evidence.observed_at,
+        evidence.market_asof,
+        evidence.retrieved_at,
+    ):
+        if value is not None and _parse_utc(value) > evidence_as_of:
+            raise ValueError("research evidence exceeds evidence_as_of")
+
+    targets = {target.ticker for target in order.targets}
+    ticker = None if evidence.ticker is None else evidence.ticker.upper()
+    target_ticker = (
+        None
+        if item.target_ticker is None
+        else item.target_ticker.strip().upper()
+    )
+    if evidence.theme is not None and evidence.theme != order.theme_id:
+        raise ValueError("research evidence is outside work-order scope")
+    if ticker is not None and ticker not in targets:
+        raise ValueError("research evidence is outside work-order scope")
+    if evidence.theme is None and ticker is None:
+        raise ValueError("research evidence is outside work-order scope")
+    if order.research_mode is ResearchMode.THEME_REASSESSMENT:
+        if target_ticker is not None or ticker is not None:
+            raise ValueError("theme reassessment requires theme-level evidence")
+    elif target_ticker not in targets:
+        raise ValueError("research evidence target is outside work-order scope")
+    if (
+        target_ticker is not None
+        and ticker is not None
+        and ticker != target_ticker
+    ):
+        raise ValueError(
+            "ticker-specific evidence does not match binding target"
+        )
+
+    dimensions = _normalize_dimensions(
+        item.dimensions,
+        field_name="research evidence dimensions",
+    )
+    frozen = FrozenResearchEvidence(
+        evidence_id=evidence.evidence_id,
+        source_hash=evidence.source_hash,
+        payload_hash=canonical_hash(evidence.payload),
+        observed_at=evidence.observed_at,
+        retrieved_at=evidence.retrieved_at,
+        market_asof=evidence.market_asof,
+        ticker=ticker,
+        theme=evidence.theme,
+        source_type=str(evidence.source_type),
+        source_ref=evidence.source_ref,
+        fact_type=evidence.fact_type,
+        is_observed_fact=evidence.is_observed_fact,
+        model_version=evidence.model_version,
+        notes=evidence.notes,
+    )
+    return ResearchEvidenceBinding(
+        evidence=frozen,
+        independent=item.independent,
+        direction=item.direction,
+        dimensions=dimensions,
+        target_ticker=target_ticker,
+    )
+
+
+def _freeze_evidence_inputs(
+    inputs: Sequence[ResearchEvidenceInput],
+    *,
+    order: ResearchWorkOrder,
+    evidence_as_of: datetime,
+) -> tuple[
+    tuple[ResearchEvidenceBinding, ...],
+    dict[str, EvidenceRecord],
+]:
+    bindings: list[ResearchEvidenceBinding] = []
+    originals: dict[str, EvidenceRecord] = {}
+    source_metadata: dict[str, tuple[bool, str]] = {}
+    for item in inputs:
+        binding = _freeze_evidence(
+            item,
+            order=order,
+            evidence_as_of=evidence_as_of,
+        )
+        digest = binding.evidence.source_hash
+        if digest in originals:
+            raise ValueError("duplicate research evidence hash")
+        metadata = (
+            binding.independent,
+            binding.evidence.source_type,
+        )
+        previous = source_metadata.get(binding.evidence.source_ref)
+        if previous is not None and previous != metadata:
+            raise ValueError("conflicting research source metadata")
+        source_metadata[binding.evidence.source_ref] = metadata
+        originals[digest] = item.evidence
+        bindings.append(binding)
+
+    return (
+        tuple(
+            sorted(
+                bindings,
+                key=lambda item: (
+                    item.evidence.source_hash,
+                    item.target_ticker or "",
+                    item.direction.value,
+                    item.dimensions,
+                ),
+            )
+        ),
+        originals,
+    )
+
+
+def _normalize_findings(
+    findings: Sequence[ResearchFinding],
+    *,
+    order: ResearchWorkOrder,
+    evidence: Mapping[str, EvidenceRecord],
+) -> tuple[ResearchFinding, ...]:
+    targets = {target.ticker for target in order.targets}
+    output: list[ResearchFinding] = []
+    seen_ids: set[str] = set()
+    for item in findings:
+        if not isinstance(item.kind, ResearchFindingKind):
+            raise TypeError("unsupported research finding kind")
+        if (
+            item.direction is not None
+            and not isinstance(item.direction, ResearchEvidenceDirection)
+        ):
+            raise TypeError("unsupported research finding direction")
+
+        finding_id = item.finding_id.strip()
+        dimension = item.dimension.strip()
+        statement = item.statement.strip()
+        if not finding_id or not dimension or not statement:
+            raise ValueError("research finding fields must be non-empty")
+        if finding_id in seen_ids:
+            raise ValueError("duplicate research finding_id")
+        seen_ids.add(finding_id)
+
+        target = (
+            None
+            if item.target_ticker is None
+            else item.target_ticker.strip().upper()
+        )
+        if target is not None and target not in targets:
+            raise ValueError("research finding target outside work order")
+
+        hashes = tuple(sorted(item.evidence_source_hashes))
+        if len(set(hashes)) != len(hashes):
+            raise ValueError("duplicate research finding evidence hash")
+        if any(digest not in evidence for digest in hashes):
+            raise ValueError("research finding references unknown evidence")
+
+        if item.kind is ResearchFindingKind.UNRESOLVED:
+            if item.direction is not None:
+                raise ValueError("unresolved finding cannot have direction")
+        else:
+            if item.direction is None or not hashes:
+                raise ValueError(
+                    "research finding requires evidence and direction"
+                )
+            if (
+                item.kind is ResearchFindingKind.OBSERVED_SYNTHESIS
+                and any(
+                    not evidence[digest].is_observed_fact
+                    for digest in hashes
+                )
+            ):
+                raise ValueError(
+                    "observed synthesis requires observed evidence"
+                )
+
+        for digest in hashes:
+            record = evidence[digest]
+            record_ticker = (
+                None if record.ticker is None else record.ticker.upper()
+            )
+            if (
+                target is not None
+                and record_ticker not in (None, target)
+            ):
+                raise ValueError(
+                    "research finding cites another target company"
+                )
+
+        output.append(
+            ResearchFinding(
+                finding_id=finding_id,
+                kind=item.kind,
+                direction=item.direction,
+                dimension=dimension,
+                target_ticker=target,
+                statement=statement,
+                evidence_source_hashes=hashes,
+            )
+        )
+    return tuple(sorted(output, key=lambda item: item.finding_id))
