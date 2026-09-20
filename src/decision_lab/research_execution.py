@@ -122,6 +122,9 @@ class ResearchWorkOrder:
     work_order_hash: str
 
 
+_DEFAULT_WORK_ORDER_POLICY = ResearchWorkOrderPolicy()
+
+
 _CONTRADICTION_QUESTIONS = (
     "What independent evidence contradicts the current theme thesis?",
     "Is the contradiction persistent, structural, or coverage-related?",
@@ -502,7 +505,7 @@ def build_research_work_order(
     *,
     theme_package: ThemePackage | None = None,
     target_tickers: Sequence[str] = (),
-    policy: ResearchWorkOrderPolicy = ResearchWorkOrderPolicy(),
+    policy: ResearchWorkOrderPolicy = _DEFAULT_WORK_ORDER_POLICY,
 ) -> ResearchWorkOrder:
     if not isinstance(research_mode, ResearchMode):
         raise TypeError("unsupported research mode")
