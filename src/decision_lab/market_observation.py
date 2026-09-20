@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
 from enum import Enum
+from itertools import pairwise
 from math import isfinite
 from pathlib import Path
 
@@ -59,7 +60,7 @@ class MarketObservationSpec:
 
     def validate(self) -> None:
         if not isinstance(self.mode, MarketObservationMode):
-            raise ValueError("unsupported market observation mode")
+            raise TypeError("unsupported market observation mode")
         if not self.theme_id.strip():
             raise ValueError("theme_id must be non-empty")
         if not self.benchmark.strip():
@@ -550,11 +551,7 @@ def adapt_market_observations(
 
             outperforming = 0
             intervals = 0
-            for start, end in zip(
-                current_sessions[:-1],
-                current_sessions[1:],
-                strict=True,
-            ):
+            for start, end in pairwise(current_sessions):
                 proxy_daily = _return(proxy_prices, start, end)
                 benchmark_daily = _return(benchmark_prices, start, end)
                 outperforming += proxy_daily > benchmark_daily
@@ -667,7 +664,6 @@ def adapt_market_observations(
         )
 
     current_sessions = sessions[current_start_index : current_end_index + 1]
-    prior_sessions = sessions[prior_start_index : prior_end_index + 1]
     all_window_sessions = sessions[prior_start_index : current_end_index + 1]
     benchmark_prices = _price_index(benchmark_rows)[benchmark]
     benchmark_current_return = _return(
@@ -788,11 +784,7 @@ def adapt_market_observations(
 
     outperforming = 0
     intervals = 0
-    for start, end in zip(
-        current_sessions[:-1],
-        current_sessions[1:],
-        strict=True,
-    ):
+    for start, end in pairwise(current_sessions):
         basket_daily = sum(
             _return(prices_by_symbol[symbol], start, end)
             for symbol in current_members
