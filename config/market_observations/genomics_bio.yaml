@@ -1,0 +1,8 @@
+version: "0.1"
+theme_id: Genomics_Bio
+mode: proxy
+benchmark: SPY
+proxies: [ARKG, XBI]
+current_return_sessions: 5
+prior_return_sessions: 5
+min_basket_members: 3
