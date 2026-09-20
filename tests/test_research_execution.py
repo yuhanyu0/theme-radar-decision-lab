@@ -1632,3 +1632,179 @@ def test_company_raw_facts_and_hierarchical_coefficients_do_not_leak_mutability(
     evidence.payload["revenue_growth"] = 9.9
 
     assert dossier == before
+
+
+
+def test_policy_dimension_tuple_must_be_non_empty():
+    record, package = _registered_archive()
+    policy = replace(
+        ResearchWorkOrderPolicy(),
+        industrials_company_dimensions=(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="industrials_company_dimensions must be non-empty",
+    ):
+        build_research_work_order(
+            record,
+            "WorkTheme",
+            ResearchMode.COMPANY_DEEP_DIVE,
+            theme_package=package,
+            target_tickers=("AAA",),
+            policy=policy,
+        )
+
+
+def test_unsupported_evidence_source_type_is_rejected_before_independence_counting():
+    order = _company_order()
+    evidence = _evidence(
+        evidence_id="weird",
+        source_ref="mystery:aaa",
+        ticker="AAA",
+        payload={"revenue_growth": 0.2},
+        source_type="mystery_model",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="unsupported research evidence source_type",
+    ):
+        _freeze_evidence_inputs(
+            (
+                ResearchEvidenceInput(
+                    evidence=evidence,
+                    independent=True,
+                    direction=ResearchEvidenceDirection.SUPPORTING,
+                    dimensions=("growth",),
+                    target_ticker="AAA",
+                ),
+            ),
+            order=order,
+            evidence_as_of=_parse_utc("2026-09-20"),
+        )
+
+
+def test_non_bool_observed_fact_flag_is_rejected():
+    order = _company_order()
+    evidence = _evidence(
+        evidence_id="typed",
+        source_ref="sec:aaa:typed",
+        ticker="AAA",
+        payload={"revenue_growth": 0.2},
+    )
+    evidence = replace(
+        evidence,
+        is_observed_fact="yes",
+        source_hash=None,
+    ).with_hash()
+
+    with pytest.raises(
+        TypeError,
+        match="is_observed_fact must be bool",
+    ):
+        _freeze_evidence_inputs(
+            (
+                ResearchEvidenceInput(
+                    evidence=evidence,
+                    independent=True,
+                    direction=ResearchEvidenceDirection.SUPPORTING,
+                    dimensions=("growth",),
+                    target_ticker="AAA",
+                ),
+            ),
+            order=order,
+            evidence_as_of=_parse_utc("2026-09-20"),
+        )
+
+
+def test_blank_source_ref_is_rejected():
+    order = _company_order()
+    evidence = _evidence(
+        evidence_id="blank-source",
+        source_ref=" ",
+        ticker="AAA",
+        payload={"revenue_growth": 0.2},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="research evidence source_ref must be non-empty",
+    ):
+        _freeze_evidence_inputs(
+            (
+                ResearchEvidenceInput(
+                    evidence=evidence,
+                    independent=True,
+                    direction=ResearchEvidenceDirection.SUPPORTING,
+                    dimensions=("growth",),
+                    target_ticker="AAA",
+                ),
+            ),
+            order=order,
+            evidence_as_of=_parse_utc("2026-09-20"),
+        )
+
+
+def test_company_as_of_timezone_spelling_does_not_change_dossier_identity():
+    record, package = _registered_archive()
+    policy = replace(
+        ResearchWorkOrderPolicy(),
+        industrials_company_dimensions=("growth",),
+        minimum_independent_sources=1,
+        minimum_independent_sources_per_company=1,
+        require_usable_linkage_for_company=False,
+    )
+    order = build_research_work_order(
+        record,
+        "WorkTheme",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=package,
+        target_tickers=("AAA",),
+        policy=policy,
+    )
+    evidence = _evidence(
+        evidence_id="aaa-timezone",
+        source_ref="sec:aaa:timezone",
+        ticker="AAA",
+        payload={"revenue_growth": 0.2},
+    )
+    binding = ResearchEvidenceInput(
+        evidence=evidence,
+        independent=True,
+        direction=ResearchEvidenceDirection.SUPPORTING,
+        dimensions=("growth",),
+        target_ticker="AAA",
+    )
+    first = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T23:00:00+00:00",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(binding,),
+        company_submissions=(
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of="2026-09-20T23:00:00+00:00",
+                adapter_name="industrials_infrastructure",
+                raw_facts={"revenue_growth": 0.2},
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        ),
+    )
+    second = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T19:00:00-04:00",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(binding,),
+        company_submissions=(
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of="2026-09-20T19:00:00-04:00",
+                adapter_name="industrials_infrastructure",
+                raw_facts={"revenue_growth": 0.2},
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        ),
+    )
+
+    assert first == second
