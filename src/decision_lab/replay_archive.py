@@ -1119,9 +1119,11 @@ def write_replay_archive(
     requested_bytes = _serialize_archive_record(record)
 
     expected_cycle_dir = resolved_root / path.parent.name
-    if path.parent.exists() or path.parent.is_symlink():
-        if path.parent.resolve(strict=False) != expected_cycle_dir:
-            raise ValueError("archive cycle directory escapes archive root")
+    if (
+        (path.parent.exists() or path.parent.is_symlink())
+        and path.parent.resolve(strict=False) != expected_cycle_dir
+    ):
+        raise ValueError("archive cycle directory escapes archive root")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.parent.resolve(strict=False) != expected_cycle_dir:
