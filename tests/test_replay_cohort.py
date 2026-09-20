@@ -1272,3 +1272,167 @@ def test_multiple_scanner_config_hashes_in_cycle_are_rejected():
         match="multiple scanner config hashes in replay cycle",
     ):
         evaluate_replay_cohort((bad,), horizons=(1,))
+
+
+
+def test_no_observation_cannot_have_current_observation():
+    record = _registered_archive(
+        themes=("Quiet",),
+        observations=(),
+    )
+    result = record.replay_result
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            combined_observations=(_radar("Quiet"),),
+        )
+    )
+
+    with pytest.raises(ValueError, match="inconsistent replay theme record"):
+        evaluate_replay_cohort((bad,), horizons=())
+
+
+def test_routed_theme_requires_current_observation():
+    record = _archive()
+    result = record.replay_result
+    bad = _archive_from_semantically_modified_result(
+        replace(result, combined_observations=())
+    )
+
+    with pytest.raises(ValueError, match="inconsistent replay theme record"):
+        evaluate_replay_cohort((bad,), horizons=())
+
+
+def _market_ready_archive():
+    theme = "MarketTheme"
+    package = _package(theme)
+    ticker = f"{theme[:3].upper()}1"
+    bars = tuple(
+        MarketBar(
+            symbol=symbol,
+            session_date=session,
+            available_at=f"{session}T21:00:00+00:00",
+            close=close,
+        )
+        for symbol, closes in (
+            ("SPY", (100, 100, 100)),
+            (ticker, (100, 100, 103)),
+        )
+        for session, close in zip(
+            ("2026-09-17", "2026-09-18", "2026-09-19"),
+            closes,
+            strict=True,
+        )
+    )
+    theme_input = ThemeReplayInput(
+        package=package,
+        market_spec=MarketObservationSpec(
+            theme_id=theme,
+            mode=MarketObservationMode.BASKET,
+            benchmark="SPY",
+            current_return_sessions=1,
+            prior_return_sessions=1,
+            min_basket_members=1,
+            version="test",
+        ),
+        market_config=MarketObservationConfig(),
+        bars=bars,
+        market_source_ref="fixture:market-ready",
+    )
+    result = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(theme_input,),
+            external_observations=(_radar(theme),),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+    return build_replay_archive_record(result)
+
+
+def test_market_batch_observations_must_reach_combined_observations():
+    record = _market_ready_archive()
+    result = record.replay_result
+    assert result.market_batches[0].observations
+
+    market_observations = set(result.market_batches[0].observations)
+    remaining = tuple(
+        observation
+        for observation in result.combined_observations
+        if observation not in market_observations
+    )
+    assert remaining
+
+    bad = _archive_from_semantically_modified_result(
+        replace(result, combined_observations=remaining)
+    )
+
+    with pytest.raises(ValueError, match="inconsistent replay theme record"):
+        evaluate_replay_cohort((bad,), horizons=())
+
+
+def test_unregistered_forced_review_cannot_claim_capacity_exhaustion():
+    record = _archive(
+        observations=(
+            _independent(
+                "UnknownRisk",
+                "unknown:risk",
+                SupportDirection.CONTRADICTING,
+            ),
+        )
+    )
+    result = record.replay_result
+    allocation = replace(
+        result.allocations[0],
+        allocation_reasons=(
+            *result.allocations[0].allocation_reasons,
+            "forced review capacity exhausted",
+        ),
+    )
+    theme_record = replace(
+        result.theme_records[0],
+        allocation=allocation,
+    )
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            allocations=(allocation,),
+            theme_records=(theme_record,),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="unsupported forced-review allocation state",
+    ):
+        evaluate_replay_cohort((bad,), horizons=())
+
+
+def test_unregistered_theme_cannot_receive_research_tier():
+    record = _archive()
+    result = record.replay_result
+    allocation = replace(
+        result.allocations[0],
+        tier=ResearchTier.FULL_DECISION_RESEARCH,
+        allocation_reasons=("full research gates satisfied",),
+    )
+    theme_record = replace(
+        result.theme_records[0],
+        allocation=allocation,
+    )
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            allocations=(allocation,),
+            theme_records=(theme_record,),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="unsupported unregistered allocation state",
+    ):
+        evaluate_replay_cohort((bad,), horizons=())
