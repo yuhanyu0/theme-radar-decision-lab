@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import json
+import os
+import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
-import json
 from math import isfinite
-import os
 from pathlib import Path
-import re
 
 from .ledger import canonical_hash
 from .market_observation import (
