@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -1518,3 +1518,118 @@ def test_research_execution_interfaces_are_publicly_importable():
         "build_research_dossier",
     ):
         assert getattr(decision_lab, name) is not None
+
+
+
+def test_dossier_evidence_as_of_cannot_precede_source_cycle():
+    record = _unregistered_forced_archive()
+    order = build_research_work_order(
+        record,
+        "UnknownRisk",
+        ResearchMode.THEME_REASSESSMENT,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="evidence_as_of precedes source cycle",
+    ):
+        build_research_dossier(
+            order,
+            evidence_as_of="2026-09-18",
+            closure=ResearchExecutionClosure.OPEN,
+        )
+
+
+def test_rehashed_semantically_invalid_work_order_is_rejected():
+    record, package = _registered_archive()
+    order = build_research_work_order(
+        record,
+        "WorkTheme",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=package,
+        target_tickers=("AAA",),
+    )
+    tampered = replace(
+        order,
+        authorization=ResearchAuthorization.UNREGISTERED_FORCED_REVIEW,
+        work_order_hash="0" * 64,
+    )
+    payload = asdict(tampered)
+    payload.pop("work_order_hash")
+    tampered = replace(
+        tampered,
+        work_order_hash=canonical_hash(payload),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="invalid research work order",
+    ):
+        build_research_dossier(
+            tampered,
+            evidence_as_of="2026-09-20",
+            closure=ResearchExecutionClosure.OPEN,
+        )
+
+
+def test_company_raw_facts_and_hierarchical_coefficients_do_not_leak_mutability():
+    order = _company_order()
+    evidence = _evidence(
+        evidence_id="aaa",
+        source_ref="sec:aaa",
+        ticker="AAA",
+        payload={"revenue_growth": 0.2},
+    )
+    raw_facts = {"revenue_growth": 0.2}
+    coefficients = {"SPY": 0.4, "WorkTheme": 0.6}
+    hierarchical = HierarchicalLinkageResult(
+        target="AAA",
+        status="ok",
+        window=63,
+        observations=63,
+        theme_correlation=0.6,
+        theme_beta=0.6,
+        r2=0.5,
+        incremental_theme_r2=0.2,
+        residual_mean=0.0,
+        residual_vol=0.02,
+        circularity_warning=False,
+        missing_controls=(),
+        coefficients=coefficients,
+    )
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence,
+                True,
+                ResearchEvidenceDirection.SUPPORTING,
+                ("growth",),
+                "AAA",
+            ),
+        ),
+        company_submissions=(
+            CompanyResearchSubmission(
+                "AAA",
+                "2026-09-20",
+                "industrials_infrastructure",
+                raw_facts,
+                (evidence.source_hash,),
+            ),
+        ),
+        linkage_submissions=(
+            CompanyLinkageSubmission(
+                "AAA",
+                hierarchical_linkage=hierarchical,
+            ),
+        ),
+    )
+    before = dossier
+
+    raw_facts["revenue_growth"] = 9.9
+    coefficients["SPY"] = 9.9
+    evidence.payload["revenue_growth"] = 9.9
+
+    assert dossier == before
