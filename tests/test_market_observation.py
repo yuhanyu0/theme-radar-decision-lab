@@ -1,6 +1,5 @@
-from pathlib import Path
-
 from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 
@@ -943,7 +942,7 @@ def test_string_mode_cannot_bypass_market_observation_mode_validation():
         proxies=(),
     )
 
-    with pytest.raises(ValueError, match="unsupported market observation mode"):
+    with pytest.raises(TypeError, match="unsupported market observation mode"):
         spec.validate()
 
 
