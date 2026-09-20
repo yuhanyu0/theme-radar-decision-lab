@@ -10,6 +10,7 @@ from .market_observation import (
     MarketObservationBatch,
     MarketObservationConfig,
     MarketObservationSpec,
+    adapt_market_observations,
 )
 from .research_budget import (
     ResearchAllocation,
@@ -236,82 +237,127 @@ def run_replay_cycle(
     sorted_prior_allocations = tuple(
         sorted(replay_input.prior_allocations, key=_allocation_sort_key)
     )
-
-    if replay_input.external_observations:
-        raise NotImplementedError("non-empty replay orchestration is not implemented")
-
-    scan_results = tuple(
-        rank_themes(
-            (),
-            {},
-            sorted_prior_scans,
-            replay_input.scanner_config,
-            cycle_as_of=replay_input.cycle_as_of,
-        )
-    )
-    allocations = tuple(
-        ResearchBudgetAllocator().allocate(
-            scan_results,
-            {},
-            sorted_prior_allocations,
-            replay_input.budget_config,
-            cycle_as_of=replay_input.cycle_as_of,
-        )
+    sorted_external = tuple(
+        sorted(replay_input.external_observations, key=_observation_sort_key)
     )
 
-    theme_records = tuple(
-        ReplayThemeRecord(
-            theme_id=theme_input.package.definition.theme_id,
-            registered=True,
-            market_batch=None,
-            scan_result=None,
-            allocation=None,
-            replay_status=ReplayStatus.NO_OBSERVATION,
+    market_batches = tuple(
+        adapt_market_observations(
+            package=theme_input.package,
+            bars=theme_input.bars,
+            spec=theme_input.market_spec,
+            config=theme_input.market_config,
+            cycle_as_of=replay_input.cycle_as_of,
+            market_source_ref=theme_input.market_source_ref,
         )
         for theme_input in sorted_themes
     )
 
-    input_payload = _empty_hash_payload(
-        replay_input,
-        sorted_prior_scans,
-        sorted_prior_allocations,
+    market_observations = tuple(
+        observation
+        for batch in market_batches
+        for observation in batch.observations
     )
-    if sorted_themes:
-        input_payload["registered_themes"] = [
-            {
-                "theme_id": item.package.definition.theme_id,
-                "definition_semantic_hash": _definition_semantic_hash(
-                    item.package.definition
-                ),
-                "package_version": item.package.version,
-                "universe_version": item.package.universe.version,
-                "universe_semantic_hash": _universe_semantic_hash(
-                    item.package.universe
-                ),
-                "market_source_ref": item.market_source_ref,
-            }
-            for item in sorted_themes
-        ]
-    input_hash = canonical_hash(input_payload)
+    combined_observations = tuple(
+        sorted(
+            (*market_observations, *sorted_external),
+            key=_observation_sort_key,
+        )
+    )
 
+    registry_state = {
+        theme_input.package.definition.theme_id: theme_input.package.definition
+        for theme_input in sorted_themes
+    }
+
+    scan_results = tuple(
+        sorted(
+            rank_themes(
+                combined_observations,
+                registry_state,
+                sorted_prior_scans,
+                replay_input.scanner_config,
+                cycle_as_of=replay_input.cycle_as_of,
+            ),
+            key=lambda item: item.theme_id,
+        )
+    )
+    allocations = tuple(
+        sorted(
+            ResearchBudgetAllocator().allocate(
+                scan_results,
+                registry_state,
+                sorted_prior_allocations,
+                replay_input.budget_config,
+                cycle_as_of=replay_input.cycle_as_of,
+            ),
+            key=lambda item: item.theme_id,
+        )
+    )
+
+    batch_by_theme = {batch.theme_id: batch for batch in market_batches}
+    scan_by_theme = {item.theme_id: item for item in scan_results}
+    allocation_by_theme = {item.theme_id: item for item in allocations}
+    registered_theme_ids = set(registry_state)
+    current_theme_ids = sorted(
+        registered_theme_ids
+        | {observation.theme_id for observation in sorted_external}
+    )
+
+    theme_records: list[ReplayThemeRecord] = []
+    for theme_id in current_theme_ids:
+        scan = scan_by_theme.get(theme_id)
+        allocation = allocation_by_theme.get(theme_id)
+        if scan is None:
+            if allocation is not None:
+                raise RuntimeError("allocation exists without scan result")
+            replay_status = ReplayStatus.NO_OBSERVATION
+        else:
+            if allocation is None:
+                raise RuntimeError("scan result exists without allocation")
+            replay_status = ReplayStatus.ROUTED
+
+        theme_records.append(
+            ReplayThemeRecord(
+                theme_id=theme_id,
+                registered=theme_id in registered_theme_ids,
+                market_batch=batch_by_theme.get(theme_id),
+                scan_result=scan,
+                allocation=allocation,
+                replay_status=replay_status,
+            )
+        )
+
+    theme_records_tuple = tuple(theme_records)
+
+    # Task 3 replaces this deliberately coarse input hash with the
+    # approved semantic-input payload. Task 2 only establishes orchestration.
+    input_hash = canonical_hash(
+        {
+            "cycle_as_of": replay_input.cycle_as_of,
+            "stage": "orchestration-v0",
+        }
+    )
     result_payload = {
         "cycle_as_of": replay_input.cycle_as_of,
         "input_hash": input_hash,
-        "market_batches": [],
-        "combined_observations": [],
+        "market_batches": [asdict(item) for item in market_batches],
+        "combined_observations": [
+            asdict(item) for item in combined_observations
+        ],
         "scan_results": [asdict(item) for item in scan_results],
         "allocations": [asdict(item) for item in allocations],
-        "theme_records": [asdict(item) for item in theme_records],
+        "theme_records": [asdict(item) for item in theme_records_tuple],
     }
     result_hash = canonical_hash(result_payload)
 
     return ReplayCycleResult(
         cycle_as_of=replay_input.cycle_as_of,
-        market_batches=(),
-        combined_observations=(),
+        market_batches=market_batches,
+        combined_observations=combined_observations,
         scan_results=scan_results,
         allocations=allocations,
-        theme_records=theme_records,
+        theme_records=theme_records_tuple,
         input_hash=input_hash,
         result_hash=result_hash,
     )
