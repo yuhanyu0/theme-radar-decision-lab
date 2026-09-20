@@ -58,6 +58,8 @@ class MarketObservationSpec:
     version: str = "0.1"
 
     def validate(self) -> None:
+        if not isinstance(self.mode, MarketObservationMode):
+            raise ValueError("unsupported market observation mode")
         if not self.theme_id.strip():
             raise ValueError("theme_id must be non-empty")
         if not self.benchmark.strip():
@@ -710,6 +712,7 @@ def adapt_market_observations(
             requested_sessions,
             cycle_end=cycle_end,
         )
+        used_member_rows.extend(member_rows)
         member_prices = _price_index(member_rows).get(symbol, {})
         if not _has_all_sessions(member_prices, current_sessions):
             continue
@@ -721,13 +724,6 @@ def adapt_market_observations(
             all_window_sessions,
         ):
             stable_members.append(symbol)
-            used_member_rows.extend(member_rows)
-        else:
-            used_member_rows.extend(
-                row
-                for row in member_rows
-                if row.session_date in set(current_sessions)
-            )
 
     current_member_symbols = tuple(current_members)
     stable_member_symbols = tuple(stable_members)
@@ -745,6 +741,16 @@ def adapt_market_observations(
             reason="too few current basket members",
             market_source_ref=market_source_ref,
         )
+        relevant_benchmark_rows = [
+            row
+            for row in benchmark_rows
+            if row.session_date in set(all_window_sessions)
+        ]
+        coverage_rows = sorted(
+            relevant_benchmark_rows + used_member_rows,
+            key=lambda row: (row.symbol, row.session_date),
+        )
+        coverage_input_hash = canonical_hash(_used_bar_payload(coverage_rows))
         diagnostic = replace(
             diagnostic,
             instrument=spec.theme_id,
@@ -753,7 +759,15 @@ def adapt_market_observations(
             current_member_count=len(current_members),
             stable_member_count=len(stable_members),
             membership_changed=current_member_symbols != stable_member_symbols,
+            input_hash=coverage_input_hash,
+            evidence_refs=(
+                market_source_ref,
+                f"package:{spec.theme_id}@{package.version}",
+                f"universe:{spec.theme_id}@{package.universe.version}",
+            ),
+            diagnostic_hash=None,
         )
+        diagnostic = _with_diagnostic_hash(diagnostic)
         return MarketObservationBatch(
             theme_id=spec.theme_id,
             cycle_as_of=cycle_as_of,
