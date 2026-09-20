@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from decision_lab.evidence import EvidenceRecord
 from decision_lab.hierarchical import HierarchicalLinkageResult
 from decision_lab.ledger import canonical_hash
 from decision_lab.linkage import LinkageResult
-from decision_lab.evidence import EvidenceRecord
 from decision_lab.market_observation import (
     MarketBar,
     MarketObservationConfig,
@@ -18,20 +18,6 @@ from decision_lab.replay_archive import build_replay_archive_record
 from decision_lab.replay_cohort import RoutingIntent
 from decision_lab.research_budget import ResearchBudgetConfig, ResearchTier
 from decision_lab.research_execution import (
-    ResearchAuthorization,
-    ResearchMode,
-    ResearchRequirementScope,
-    ResearchEvidenceDirection,
-    CompanyLinkageStatus,
-    CompanyLinkageSubmission,
-    CompanyResearchSubmission,
-    ResearchDossierStatus,
-    ResearchEvidenceInput,
-    ResearchExecutionClosure,
-    ResearchFinding,
-    ResearchFindingKind,
-    ResearchWorkOrderPolicy,
-    _build_company_assessments,
     _freeze_evidence_inputs,
     _linkage_status,
     _normalize_company_submissions,
@@ -40,6 +26,19 @@ from decision_lab.research_execution import (
     _parse_utc,
     build_research_dossier,
     build_research_work_order,
+    CompanyLinkageStatus,
+    CompanyLinkageSubmission,
+    CompanyResearchSubmission,
+    ResearchAuthorization,
+    ResearchDossierStatus,
+    ResearchEvidenceDirection,
+    ResearchEvidenceInput,
+    ResearchExecutionClosure,
+    ResearchFinding,
+    ResearchFindingKind,
+    ResearchMode,
+    ResearchRequirementScope,
+    ResearchWorkOrderPolicy,
 )
 from decision_lab.scanner import (
     ScannerConfig,
@@ -1424,10 +1423,10 @@ def _first_effective_ticker(package):
         as_of="2026-09-19"
     )
     assert candidates
-    return sorted(
+    return min(
         candidate.ticker.upper()
         for candidate in candidates
-    )[0]
+    )
 
 
 def test_real_theme_packages_generate_domain_specific_company_requirements():
