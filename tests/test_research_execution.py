@@ -18,14 +18,6 @@ from decision_lab.replay_archive import build_replay_archive_record
 from decision_lab.replay_cohort import RoutingIntent
 from decision_lab.research_budget import ResearchBudgetConfig, ResearchTier
 from decision_lab.research_execution import (
-    _freeze_evidence_inputs,
-    _linkage_status,
-    _normalize_company_submissions,
-    _normalize_findings,
-    _normalize_linkage_submissions,
-    _parse_utc,
-    build_research_dossier,
-    build_research_work_order,
     CompanyLinkageStatus,
     CompanyLinkageSubmission,
     CompanyResearchSubmission,
@@ -39,6 +31,14 @@ from decision_lab.research_execution import (
     ResearchMode,
     ResearchRequirementScope,
     ResearchWorkOrderPolicy,
+    _freeze_evidence_inputs,
+    _linkage_status,
+    _normalize_company_submissions,
+    _normalize_findings,
+    _normalize_linkage_submissions,
+    _parse_utc,
+    build_research_dossier,
+    build_research_work_order,
 )
 from decision_lab.scanner import (
     ScannerConfig,
