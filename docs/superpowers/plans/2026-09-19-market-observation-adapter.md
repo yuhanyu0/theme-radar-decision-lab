@@ -270,6 +270,25 @@ def test_theme_mismatch_and_invalid_spec_are_rejected():
             proxies=(),
         ).validate()
 
+    with pytest.raises(ValueError, match="duplicate proxies"):
+        MarketObservationSpec(
+            theme_id="Genomics_Bio",
+            mode=MarketObservationMode.PROXY,
+            benchmark="SPY",
+            proxies=("ARKG", "arkg"),
+        ).validate()
+
+    with pytest.raises(ValueError, match="proxy cannot equal benchmark"):
+        MarketObservationSpec(
+            theme_id="Genomics_Bio",
+            mode=MarketObservationMode.PROXY,
+            benchmark="SPY",
+            proxies=("SPY",),
+        ).validate()
+
+    with pytest.raises(ValueError, match="normalization scales must be positive"):
+        replace(MarketObservationConfig(), novelty_scale=0.0).validate()
+
 
 def test_insufficient_benchmark_history_returns_coverage_pending():
     package = _package()
@@ -496,26 +515,48 @@ def _cycle_end(value: str) -> datetime:
     return dt
 
 
-def _required_symbols(package: ThemePackage, spec: MarketObservationSpec) -> set[str]:
-    symbols = {spec.benchmark.upper()}
-    if spec.mode is MarketObservationMode.PROXY:
-        symbols.update(p.upper() for p in spec.proxies)
-    else:
-        symbols.update(package.universe.symbols())
-    return symbols
+def _symbol_rows(
+    bars: Sequence[MarketBar],
+    symbol: str,
+) -> list[MarketBar]:
+    target = symbol.upper()
+    return [bar for bar in bars if bar.symbol.upper() == target]
+
+
+def _validate_used_rows(
+    rows: Sequence[MarketBar],
+    *,
+    cycle_end: datetime,
+) -> list[MarketBar]:
+    normalized: list[MarketBar] = []
+    seen: set[tuple[str, str]] = set()
+    for bar in rows:
+        bar.validate()
+        fixed = replace(bar, symbol=bar.symbol.upper())
+        key = (fixed.symbol, fixed.session_date)
+        if key in seen:
+            raise ValueError("duplicate symbol/session_date")
+        seen.add(key)
+        if _parse_utc(fixed.available_at) > cycle_end:
+            raise ValueError("required bar available after cycle_as_of")
+        normalized.append(fixed)
+    return sorted(normalized, key=lambda row: (row.symbol, row.session_date))
 ```
 
 Important validation order in `adapt_market_observations`:
 
 1. validate spec/config/theme match;
-2. determine required symbols;
-3. discard rows whose uppercase symbol is not required;
-4. validate only remaining rows;
-5. normalize symbol uppercase;
-6. reject duplicate `(symbol, session_date)`;
-7. reject required rows with `available_at > _cycle_end(cycle_as_of)`;
-8. build benchmark session dates;
-9. if benchmark has fewer than `current_return_sessions + prior_return_sessions + 1` sessions, return one COVERAGE_PENDING diagnostic.
+2. isolate rows whose symbol matches the benchmark, ignoring every other symbol at this stage;
+3. validate only benchmark rows; reject benchmark duplicates/future-available rows;
+4. build benchmark session dates and determine prior/current windows;
+5. if benchmark has insufficient history, return one COVERAGE_PENDING diagnostic without validating unrelated/member/proxy rows;
+6. for PROXY mode, declared proxies become the only additional semantically used symbols; validate each proxy independently;
+7. for BASKET mode, determine candidate eligibility from effective dates and the already-known benchmark window before selecting member rows;
+8. only candidates effective for the entire current window are semantically used for current metrics, so only their rows are validated;
+9. candidates admitted after current_start or expired by current_end are ignored before row validation;
+10. stable cohort eligibility is stricter (prior_start through current_end) but is a subset of current full-window eligibility.
+
+This order is required by Review Focus #1: an invalid row for a future/not-yet-effective member must not break a valid current basket.
 
 The Task-1 coverage diagnostic has all numeric fields None, exact package/universe/spec/config versions and hashes, and `input_hash` over the used benchmark bars.
 
@@ -633,6 +674,58 @@ def test_basket_current_return_breadth_persistence_and_excess_are_exact():
     assert len(batch.observations) == 1
 
 
+def test_strong_broad_basket_is_supporting():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("B", effective_from="2026-01-01"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 105, 110])
+        + _series("B", [100, 100, 100, 104, 108])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].current_excess_return > 0.02
+    assert batch.diagnostics[0].breadth == 1.0
+    assert batch.diagnostics[0].support_direction is SupportDirection.SUPPORTING
+
+
+def test_mixed_basket_is_neutral():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("B", effective_from="2026-01-01"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 101, 102])
+        + _series("B", [100, 100, 100, 99, 98])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].support_direction is SupportDirection.NEUTRAL
+
+
 def test_member_admitted_after_window_start_is_excluded_from_current_basket():
     package = _package(
         candidates=[
@@ -657,6 +750,75 @@ def test_member_admitted_after_window_start_is_excluded_from_current_basket():
 
     assert batch.diagnostics[0].current_member_symbols == ("A",)
     assert batch.diagnostics[0].current_return == pytest.approx(0.05)
+
+
+def test_membership_uses_session_date_not_available_at():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("NEW", effective_from="2026-09-15"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 100, 101])
+        + [
+            _bar(
+                "NEW",
+                session,
+                close,
+                available_at="2026-09-15T10:00:00+00:00",
+            )
+            for session, close in zip(
+                _sessions(),
+                [100, 100, 100, 100, 200],
+                strict=True,
+            )
+        ]
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=replace(_basket_spec(), min_basket_members=1),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].current_member_symbols == ("A",)
+
+
+def test_invalid_rows_for_not_yet_effective_member_are_ignored():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("FUTURE", effective_from="2026-10-01"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 100, 101])
+        + [
+            MarketBar(
+                symbol="FUTURE",
+                session_date="bad-date",
+                available_at="2099-01-01",
+                close=-1,
+            )
+        ]
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=replace(_basket_spec(), min_basket_members=1),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].current_member_symbols == ("A",)
 
 
 def test_effective_to_is_half_open_on_session_date():
@@ -748,6 +910,8 @@ def test_membership_changed_is_explicit_when_current_cohort_exceeds_stable_cohor
     assert diag.current_member_symbols == ("A", "B")
     assert diag.stable_member_symbols == ("A",)
     assert diag.membership_changed
+    assert diag.current_excess_return == pytest.approx(0.10)
+    assert diag.comparison_current_excess_return == pytest.approx(0.0)
 
 
 def test_insufficient_stable_cohort_leaves_only_novelty_missing():
@@ -1182,6 +1346,8 @@ def _with_diagnostic_hash(
     return replace(diagnostic, diagnostic_hash=digest)
 ```
 
+Diagnostic evidence_refs must contain only upstream provenance such as market_source_ref, package/universe identifiers, and proxy identifier. A diagnostic must never include `diagnostic:<its own hash>` in its own evidence_refs, which would create a circular hash dependency. Only the emitted ThemeScanObservation adds the `diagnostic:<diagnostic_hash>` reference.
+
 For each READY diagnostic:
 
 ```python
@@ -1336,6 +1502,53 @@ def test_real_genomics_package_cannot_retroactively_form_five_session_basket():
     assert batch.observations == ()
     assert batch.diagnostics[0].status is MarketObservationStatus.COVERAGE_PENDING
     assert batch.diagnostics[0].current_member_count == 0
+
+
+def test_adapter_does_not_mutate_theme_package_or_permission_state():
+    from copy import deepcopy
+
+    package = load_theme_package(ROOT / "config/themes/genomics_bio.yaml")
+    before = deepcopy(package)
+    policy_before = package.theme_key_policy
+
+    sessions = [
+        "2026-09-14",
+        "2026-09-15",
+        "2026-09-16",
+        "2026-09-17",
+        "2026-09-18",
+    ]
+    bars = [
+        _bar("SPY", session, 100)
+        for session in sessions
+    ] + [
+        _bar("ARKG", session, close)
+        for session, close in zip(
+            sessions,
+            [100, 100, 100, 110, 120],
+            strict=True,
+        )
+    ]
+    spec = replace(
+        load_market_observation_spec(
+            ROOT / "config/market_observations/genomics_bio.yaml"
+        ),
+        current_return_sessions=2,
+        prior_return_sessions=2,
+        proxies=("ARKG",),
+    )
+
+    adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=spec,
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-18",
+        market_source_ref="fixture:no-mutation",
+    )
+
+    assert package == before
+    assert package.theme_key_policy == policy_before
 
 
 def test_market_observation_interfaces_are_publicly_importable():
