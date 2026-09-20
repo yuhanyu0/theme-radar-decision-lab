@@ -662,6 +662,45 @@ def test_reader_rejects_string_for_numeric_field(tmp_path):
         read_replay_archive(path)
 
 
+def test_reader_rejects_non_string_identity_field(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload["replay_result"]["scan_results"][0]["theme_id"] = 123
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(TypeError, match="theme_id"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_non_finite_json_constant(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    path = _standard_path(tmp_path, record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(_record_payload(record), allow_nan=False)
+    text = text.replace(
+        '"research_priority": 0.0',
+        '"research_priority": NaN',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    assert not verify_replay_archive(path)
+    with pytest.raises(ValueError, match="non-finite JSON constant"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_missing_top_level_field(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload.pop("producer")
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(ValueError, match="missing archive fields"):
+        read_replay_archive(path)
+
+
 def test_reader_rejects_wrong_filename(tmp_path):
     record = build_replay_archive_record(_sample_replay_result())
     path = tmp_path / "2026-09-19" / f"{'1' * 64}.json"
@@ -715,6 +754,7 @@ Extend `replay_archive.py` imports:
 ```python
 import json
 from collections.abc import Mapping
+from math import isfinite
 
 from .market_observation import (
     MarketObservationBatch,
@@ -914,12 +954,45 @@ def _require_list(value, *, field_name: str) -> list[object]:
     return value
 
 
+def _require_str(value, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    return value
+
+
+def _require_optional_str(value, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _require_str(value, field_name=field_name)
+
+
+def _require_literal(
+    value,
+    *,
+    field_name: str,
+    allowed: set[str],
+) -> str:
+    text = _require_str(value, field_name=field_name)
+    if text not in allowed:
+        raise ValueError(f"invalid {field_name}")
+    return text
+
+
 def _require_number_or_none(value, *, field_name: str):
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{field_name} must be numeric or null")
+    if not isfinite(float(value)):
+        raise ValueError(f"{field_name} must be finite")
     return value
+
+
+def _require_number(value, *, field_name: str) -> float | int:
+    number = _require_number_or_none(value, field_name=field_name)
+    if number is None:
+        raise TypeError(f"{field_name} must be numeric")
+    return number
 
 
 def _require_int(value, *, field_name: str) -> int:
@@ -979,10 +1052,19 @@ def _decode_theme_scan_observation(value) -> ThemeScanObservation:
         raise ValueError("invalid ThemeScanObservation source_type")
 
     return ThemeScanObservation(
-        theme_id=str(payload["theme_id"]),
-        as_of=str(payload["as_of"]),
+        theme_id=_require_str(
+            payload["theme_id"],
+            field_name="theme_id",
+        ),
+        as_of=_require_str(
+            payload["as_of"],
+            field_name="as_of",
+        ),
         source_type=source_type,
-        source_ref=str(payload["source_ref"]),
+        source_ref=_require_str(
+            payload["source_ref"],
+            field_name="source_ref",
+        ),
         discovery_signal=_require_number_or_none(
             payload["discovery_signal"],
             field_name="discovery_signal",
@@ -1022,19 +1104,48 @@ def _decode_theme_scan_observation(value) -> ThemeScanObservation:
             payload["is_independent"],
             field_name="is_independent",
         ),
-        observed_or_inferred=payload["observed_or_inferred"],
-        notes=payload["notes"],
+        observed_or_inferred=_require_literal(
+            payload["observed_or_inferred"],
+            field_name="observed_or_inferred",
+            allowed={"observed", "inferred"},
+        ),
+        notes=_require_optional_str(
+            payload["notes"],
+            field_name="notes",
+        ),
     )
 ```
 
-Implement `_decode_market_diagnostic` analogously, explicitly converting:
-- `mode=MarketObservationMode(...)`
-- `status=MarketObservationStatus(...)`
-- `support_direction=SupportDirection(...)`
-- member/evidence/warning arrays to tuples;
-- integer counts with `_require_int`;
-- booleans with `_require_bool`;
-- optional numeric fields with `_require_number_or_none`.
+Implement `_decode_market_diagnostic` with an explicit constructor after `_require_exact_fields`. Every string identity/date/version/hash field uses `_require_str` or `_require_optional_str`; do not call `str(...)`. Convert exactly:
+- `mode=MarketObservationMode(_require_str(payload["mode"], field_name="mode"))`
+- `status=MarketObservationStatus(_require_str(payload["status"], field_name="status"))`
+- `support_direction=SupportDirection(_require_str(payload["support_direction"], field_name="support_direction"))`
+- `current_member_symbols`, `stable_member_symbols`, `evidence_refs`, and `warnings` with `_tuple_of_strings`;
+- `current_member_count` and `stable_member_count` with `_require_int`;
+- `membership_changed` with `_require_bool`;
+- every optional return/signal/breadth/persistence field with `_require_number_or_none`;
+- `diagnostic_hash` with `_require_optional_str`.
+
+Implement `_decode_scan_result` with exact fields and:
+- all identity/date/lifecycle/config/registry fields through strict string helpers;
+- all tuple fields through `_tuple_of_strings`;
+- counts/severity through `_require_int`;
+- booleans through `_require_bool`;
+- numeric scores through `_require_number_or_none` where nullable and a new `_require_number` helper where non-null.
+
+Implement `_decode_allocation` with:
+- `tier=ResearchTier(_require_str(payload["tier"], field_name="tier"))`;
+- strict string helpers for identifiers/hashes/date;
+- numeric helpers for priorities;
+- `_require_bool` for forced_review;
+- `_tuple_of_strings` for reasons.
+
+Implement `_decode_theme_record` with:
+- strict `theme_id` and `registered`;
+- optional nested objects decoded only when the value is not None;
+- `ReplayStatus(_require_str(payload["replay_status"], field_name="replay_status"))`.
+
+No decoder may repair or coerce a wrong primitive type.
 
 Implement `_decode_market_batch`:
 
@@ -1047,9 +1158,18 @@ def _decode_market_batch(value) -> MarketObservationBatch:
         label="MarketObservationBatch",
     )
     return MarketObservationBatch(
-        theme_id=str(payload["theme_id"]),
-        cycle_as_of=str(payload["cycle_as_of"]),
-        market_as_of=payload["market_as_of"],
+        theme_id=_require_str(
+            payload["theme_id"],
+            field_name="theme_id",
+        ),
+        cycle_as_of=_require_str(
+            payload["cycle_as_of"],
+            field_name="cycle_as_of",
+        ),
+        market_as_of=_require_optional_str(
+            payload["market_as_of"],
+            field_name="market_as_of",
+        ),
         observations=tuple(
             _decode_theme_scan_observation(item)
             for item in _require_list(
@@ -1064,9 +1184,18 @@ def _decode_market_batch(value) -> MarketObservationBatch:
                 field_name="diagnostics",
             )
         ),
-        input_hash=str(payload["input_hash"]),
-        spec_hash=str(payload["spec_hash"]),
-        config_hash=str(payload["config_hash"]),
+        input_hash=_require_str(
+            payload["input_hash"],
+            field_name="input_hash",
+        ),
+        spec_hash=_require_str(
+            payload["spec_hash"],
+            field_name="spec_hash",
+        ),
+        config_hash=_require_str(
+            payload["config_hash"],
+            field_name="config_hash",
+        ),
     )
 ```
 
@@ -1083,7 +1212,10 @@ def _decode_replay_result(value) -> ReplayCycleResult:
         label="ReplayCycleResult",
     )
     return ReplayCycleResult(
-        cycle_as_of=str(payload["cycle_as_of"]),
+        cycle_as_of=_require_str(
+            payload["cycle_as_of"],
+            field_name="cycle_as_of",
+        ),
         market_batches=tuple(
             _decode_market_batch(item)
             for item in _require_list(
@@ -1119,8 +1251,14 @@ def _decode_replay_result(value) -> ReplayCycleResult:
                 field_name="theme_records",
             )
         ),
-        input_hash=str(payload["input_hash"]),
-        result_hash=str(payload["result_hash"]),
+        input_hash=_require_str(
+            payload["input_hash"],
+            field_name="input_hash",
+        ),
+        result_hash=_require_str(
+            payload["result_hash"],
+            field_name="result_hash",
+        ),
     )
 ```
 
@@ -1139,22 +1277,50 @@ def _decode_archive_record(payload) -> ReplayArchiveRecord:
         label="archive",
     )
     record = ReplayArchiveRecord(
-        schema_version=str(data["schema_version"]),
-        content_type=str(data["content_type"]),
-        producer=str(data["producer"]),
-        cycle_as_of=str(data["cycle_as_of"]),
-        replay_input_hash=str(data["replay_input_hash"]),
-        replay_result_hash=str(data["replay_result_hash"]),
+        schema_version=_require_str(
+            data["schema_version"],
+            field_name="schema_version",
+        ),
+        content_type=_require_str(
+            data["content_type"],
+            field_name="content_type",
+        ),
+        producer=_require_str(
+            data["producer"],
+            field_name="producer",
+        ),
+        cycle_as_of=_require_str(
+            data["cycle_as_of"],
+            field_name="cycle_as_of",
+        ),
+        replay_input_hash=_require_str(
+            data["replay_input_hash"],
+            field_name="replay_input_hash",
+        ),
+        replay_result_hash=_require_str(
+            data["replay_result_hash"],
+            field_name="replay_result_hash",
+        ),
         replay_result=_decode_replay_result(data["replay_result"]),
-        archive_record_hash=str(data["archive_record_hash"]),
+        archive_record_hash=_require_str(
+            data["archive_record_hash"],
+            field_name="archive_record_hash",
+        ),
     )
     _validate_archive_record(record)
     return record
 
 
+def _reject_json_constant(value: str):
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
 def read_replay_archive(path: str | Path) -> ReplayArchiveRecord:
     target = Path(path)
-    payload = json.loads(target.read_text(encoding="utf-8"))
+    payload = json.loads(
+        target.read_text(encoding="utf-8"),
+        parse_constant=_reject_json_constant,
+    )
     record = _decode_archive_record(payload)
 
     expected_name = f"{record.replay_result_hash}.json"
@@ -1794,13 +1960,189 @@ def test_reader_rejects_non_object_top_level_json(tmp_path):
 
 Adjust test helper `_write_payload` to accept any JSON value.
 
-- [ ] **Step 4: Add typed round-trip equality test through writer**
+- [ ] **Step 4: Add the full Increment-5 public-safe replay fixture and typed writer round-trip**
 
-Add:
+Add imports:
 
 ```python
-def test_write_read_verify_round_trip_preserves_typed_result(tmp_path):
-    replay_result = _market_replay_result()
+from decision_lab.market_observation import (
+    load_market_observation_config,
+    load_market_observation_spec,
+)
+from decision_lab.themes import load_theme_package
+```
+
+Add the full replay fixture:
+
+```python
+ROOT = Path(__file__).resolve().parents[1]
+
+REPLAY_SESSIONS = (
+    "2026-09-03",
+    "2026-09-04",
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11",
+    "2026-09-14",
+    "2026-09-15",
+    "2026-09-16",
+    "2026-09-17",
+    "2026-09-18",
+)
+
+
+def _series(symbol, closes):
+    return tuple(
+        MarketBar(
+            symbol=symbol,
+            session_date=session,
+            available_at=f"{session}T21:00:00+00:00",
+            close=close,
+        )
+        for session, close in zip(REPLAY_SESSIONS, closes, strict=True)
+    )
+
+
+def _full_replay_result():
+    market_config = load_market_observation_config(
+        ROOT / "config/adapters/market_observation_defaults.yaml"
+    )
+    dc_package = load_theme_package(
+        ROOT / "config/themes/datacenter_infra.yaml"
+    )
+    bio_package = load_theme_package(
+        ROOT / "config/themes/genomics_bio.yaml"
+    )
+    dc_spec = load_market_observation_spec(
+        ROOT / "config/market_observations/datacenter_infra.yaml"
+    )
+    bio_spec = load_market_observation_spec(
+        ROOT / "config/market_observations/genomics_bio.yaml"
+    )
+
+    dc_bars = (
+        _series("SPY", [100] * 11)
+        + _series(
+            "BE",
+            [100, 102, 104, 106, 108, 110, 106, 102, 98, 94, 90],
+        )
+        + _series(
+            "NRG",
+            [100, 101, 102, 103, 104, 105, 102, 99, 96, 93, 90],
+        )
+        + _series(
+            "CEG",
+            [100, 102, 103, 105, 106, 108, 106, 103, 100, 98, 95],
+        )
+    )
+    bio_bars = (
+        _series("SPY", [100] * 11)
+        + _series(
+            "ARKG",
+            [100, 99, 98, 97, 96, 95, 100, 105, 110, 115, 120],
+        )
+        + _series(
+            "XBI",
+            [100, 99, 98, 97, 96, 96, 96.2, 96.4, 96.6, 96.8, 97.0],
+        )
+    )
+
+    quiet_universe = ThemeUniverse(
+        theme="QuietTheme",
+        version="u1",
+        generated_at="2026-09-19T00:00:00Z",
+    )
+    quiet_universe.add_layer(ThemeLayer("layer"))
+    quiet_package = ThemePackage(
+        definition=ThemeDefinition(
+            theme_id="QuietTheme",
+            display_name="Quiet Theme",
+            lifecycle_state=ThemeLifecycleState.STRENGTHENING,
+            effective_from="2026-01-01",
+            version="1",
+        ),
+        universe=quiet_universe,
+        theme_key_policy=ThemeKeyPolicy(),
+        evidence_adapter="generic",
+        version="p1",
+        source_path="fixture",
+    )
+    quiet_spec = MarketObservationSpec(
+        theme_id="QuietTheme",
+        mode=MarketObservationMode.BASKET,
+        benchmark="SPY",
+        current_return_sessions=1,
+        prior_return_sessions=1,
+        min_basket_members=1,
+        version="test",
+    )
+
+    def radar(theme, discovery, novelty):
+        return ThemeScanObservation(
+            theme_id=theme,
+            as_of="2026-09-19",
+            source_type="radar_model_output",
+            source_ref=f"radar:{theme}:2026-09-19",
+            discovery_signal=discovery,
+            novelty_signal=novelty,
+            support_direction=SupportDirection.SUPPORTING,
+            evidence_refs=(f"radar:{theme}",),
+            is_independent=False,
+            observed_or_inferred="inferred",
+        )
+
+    return run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(
+                ThemeReplayInput(
+                    package=dc_package,
+                    market_spec=dc_spec,
+                    market_config=market_config,
+                    bars=dc_bars,
+                    market_source_ref="fixture:archive:datacenter",
+                ),
+                ThemeReplayInput(
+                    package=bio_package,
+                    market_spec=bio_spec,
+                    market_config=market_config,
+                    bars=bio_bars,
+                    market_source_ref="fixture:archive:genomics",
+                ),
+                ThemeReplayInput(
+                    package=quiet_package,
+                    market_spec=quiet_spec,
+                    market_config=market_config,
+                    bars=(
+                        MarketBar(
+                            symbol="SPY",
+                            session_date="2026-09-19",
+                            available_at="2026-09-19T21:00:00+00:00",
+                            close=100,
+                        ),
+                    ),
+                    market_source_ref="fixture:archive:quiet",
+                ),
+            ),
+            external_observations=(
+                radar("DataCenter_Infra", 0.9, 0.8),
+                radar("Genomics_Bio", 0.85, 0.75),
+                radar("Rates", 0.8, 0.6),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+```
+
+Then add:
+
+```python
+def test_write_read_verify_round_trip_preserves_full_typed_result(tmp_path):
+    replay_result = _full_replay_result()
     record = build_replay_archive_record(replay_result)
     root = tmp_path / "recomputed" / "replay_cycles"
 
@@ -1815,6 +2157,33 @@ def test_write_read_verify_round_trip_preserves_typed_result(tmp_path):
     assert verify_replay_archive(written.path)
     assert loaded == record
     assert loaded.replay_result == replay_result
+```
+
+Add:
+
+```python
+def test_archive_identity_is_independent_of_root_and_mtime(tmp_path):
+    replay_result = _full_replay_result()
+    first_record = build_replay_archive_record(replay_result)
+    second_record = build_replay_archive_record(replay_result)
+    assert first_record == second_record
+
+    first = write_replay_archive(
+        first_record,
+        tmp_path / "private-a",
+        destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+    )
+    second = write_replay_archive(
+        second_record,
+        tmp_path / "private-b",
+        destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+    )
+
+    os.utime(first.path, (1_000_000, 1_000_000))
+
+    assert verify_replay_archive(first.path)
+    assert verify_replay_archive(second.path)
+    assert read_replay_archive(first.path) == read_replay_archive(second.path)
 ```
 
 - [ ] **Step 5: Add public import RED test**
