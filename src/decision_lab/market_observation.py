@@ -282,6 +282,36 @@ def _basket_direction(
     return SupportDirection.NEUTRAL
 
 
+def _proxy_direction(
+    *,
+    current_excess: float,
+    persistence: float,
+    config: MarketObservationConfig,
+) -> SupportDirection:
+    if (
+        current_excess >= config.proxy_support_excess_min
+        and persistence >= config.proxy_support_persistence_min
+    ):
+        return SupportDirection.SUPPORTING
+    if (
+        current_excess <= config.proxy_contradiction_excess_max
+        and persistence <= config.proxy_contradiction_persistence_max
+    ):
+        return SupportDirection.CONTRADICTING
+    return SupportDirection.NEUTRAL
+
+
+def _with_diagnostic_hash(
+    diagnostic: MarketObservationDiagnostics,
+) -> MarketObservationDiagnostics:
+    payload = asdict(diagnostic)
+    payload["diagnostic_hash"] = None
+    return replace(
+        diagnostic,
+        diagnostic_hash=canonical_hash(payload),
+    )
+
+
 def _member_rows_for_sessions(
     bars: Sequence[MarketBar],
     symbol: str,
@@ -315,7 +345,7 @@ def _coverage_diagnostic(
     spec_hash = canonical_hash(asdict(spec))
     config_hash = canonical_hash(asdict(config))
     input_hash = canonical_hash(_used_bar_payload(benchmark_rows))
-    return MarketObservationDiagnostics(
+    diagnostic = MarketObservationDiagnostics(
         theme_id=spec.theme_id,
         mode=spec.mode,
         instrument=spec.benchmark.upper(),
@@ -336,6 +366,7 @@ def _coverage_diagnostic(
         config_hash=config_hash,
         evidence_refs=(market_source_ref,),
     )
+    return _with_diagnostic_hash(diagnostic)
 
 
 def adapt_market_observations(
@@ -409,26 +440,199 @@ def adapt_market_observations(
     prior_start = sessions[prior_start_index]
 
     if spec.mode is MarketObservationMode.PROXY:
-        diagnostic = _coverage_diagnostic(
-            package=package,
-            spec=spec,
-            config=config,
-            benchmark_rows=benchmark_rows,
-            market_as_of=market_as_of,
-            current_start=current_start,
-            current_end=market_as_of,
-            prior_start=prior_start,
-            prior_end=prior_end,
-            reason="proxy observations not implemented",
-            market_source_ref=market_source_ref,
+        all_window_sessions = sessions[prior_start_index : current_end_index + 1]
+        current_sessions = sessions[current_start_index : current_end_index + 1]
+        benchmark_prices = _price_index(benchmark_rows)[benchmark]
+        benchmark_current_return = _return(
+            benchmark_prices,
+            current_start,
+            market_as_of,
+        )
+        benchmark_prior_return = _return(
+            benchmark_prices,
+            prior_start,
+            prior_end,
+        )
+        benchmark_window_rows = [
+            row
+            for row in benchmark_rows
+            if row.session_date in set(all_window_sessions)
+        ]
+
+        diagnostics: list[MarketObservationDiagnostics] = []
+        observations: list[ThemeScanObservation] = []
+        for instrument in sorted(proxy.upper() for proxy in spec.proxies):
+            proxy_rows = _member_rows_for_sessions(
+                bars,
+                instrument,
+                all_window_sessions,
+                cycle_end=cycle_end,
+            )
+            proxy_prices = _price_index(proxy_rows).get(instrument, {})
+            used_rows = sorted(
+                benchmark_window_rows + proxy_rows,
+                key=lambda row: (row.symbol, row.session_date),
+            )
+            input_hash = canonical_hash(_used_bar_payload(used_rows))
+
+            if not _has_all_sessions(proxy_prices, all_window_sessions):
+                diagnostic = MarketObservationDiagnostics(
+                    theme_id=spec.theme_id,
+                    mode=spec.mode,
+                    instrument=instrument,
+                    benchmark=benchmark,
+                    market_as_of=market_as_of,
+                    current_start=current_start,
+                    current_end=market_as_of,
+                    prior_start=prior_start,
+                    prior_end=prior_end,
+                    status=MarketObservationStatus.COVERAGE_PENDING,
+                    reason="incomplete proxy history",
+                    universe_version=package.universe.version,
+                    package_version=package.version,
+                    spec_version=spec.version,
+                    config_version=config.version,
+                    input_hash=input_hash,
+                    spec_hash=spec_hash,
+                    config_hash=config_hash,
+                    evidence_refs=(
+                        market_source_ref,
+                        f"package:{spec.theme_id}@{package.version}",
+                        f"universe:{spec.theme_id}@{package.universe.version}",
+                        f"proxy:{instrument}",
+                    ),
+                )
+                diagnostics.append(_with_diagnostic_hash(diagnostic))
+                continue
+
+            current_return = _return(
+                proxy_prices,
+                current_start,
+                market_as_of,
+            )
+            prior_return = _return(
+                proxy_prices,
+                prior_start,
+                prior_end,
+            )
+            current_excess = current_return - benchmark_current_return
+            prior_excess = prior_return - benchmark_prior_return
+            novelty_abs_excess_change = abs(current_excess - prior_excess)
+
+            outperforming = 0
+            intervals = 0
+            for start, end in zip(
+                current_sessions[:-1],
+                current_sessions[1:],
+                strict=True,
+            ):
+                proxy_daily = _return(proxy_prices, start, end)
+                benchmark_daily = _return(benchmark_prices, start, end)
+                outperforming += proxy_daily > benchmark_daily
+                intervals += 1
+            persistence = outperforming / intervals
+
+            direction = _proxy_direction(
+                current_excess=current_excess,
+                persistence=persistence,
+                config=config,
+            )
+            relative_strength_signal = _clip01(
+                0.5 + current_excess / config.relative_strength_scale
+            )
+            novelty_signal = _clip01(
+                novelty_abs_excess_change / config.novelty_scale
+            )
+            diagnostic = MarketObservationDiagnostics(
+                theme_id=spec.theme_id,
+                mode=spec.mode,
+                instrument=instrument,
+                benchmark=benchmark,
+                market_as_of=market_as_of,
+                current_start=current_start,
+                current_end=market_as_of,
+                prior_start=prior_start,
+                prior_end=prior_end,
+                status=MarketObservationStatus.READY,
+                reason="ready",
+                current_return=current_return,
+                benchmark_current_return=benchmark_current_return,
+                current_excess_return=current_excess,
+                comparison_current_excess_return=current_excess,
+                comparison_prior_excess_return=prior_excess,
+                novelty_abs_excess_change=novelty_abs_excess_change,
+                breadth=None,
+                persistence=persistence,
+                support_direction=direction,
+                relative_strength_signal=relative_strength_signal,
+                breadth_signal=None,
+                persistence_signal=persistence,
+                novelty_signal=novelty_signal,
+                universe_version=package.universe.version,
+                package_version=package.version,
+                spec_version=spec.version,
+                config_version=config.version,
+                input_hash=input_hash,
+                spec_hash=spec_hash,
+                config_hash=config_hash,
+                evidence_refs=(
+                    market_source_ref,
+                    f"package:{spec.theme_id}@{package.version}",
+                    f"universe:{spec.theme_id}@{package.universe.version}",
+                    f"proxy:{instrument}",
+                ),
+            )
+            diagnostic = _with_diagnostic_hash(diagnostic)
+            diagnostics.append(diagnostic)
+
+            source_ref = (
+                f"market_observation:{spec.theme_id}:{spec.mode.value}:"
+                f"{instrument}:{market_as_of}:{input_hash[:12]}"
+            )
+            observations.append(
+                ThemeScanObservation(
+                    theme_id=spec.theme_id,
+                    as_of=market_as_of,
+                    source_type="derived_feature",
+                    source_ref=source_ref,
+                    discovery_signal=None,
+                    structure_signal=None,
+                    persistence_signal=persistence,
+                    breadth_signal=None,
+                    relative_strength_signal=relative_strength_signal,
+                    volatility_signal=None,
+                    novelty_signal=novelty_signal,
+                    support_direction=direction,
+                    evidence_refs=(
+                        market_source_ref,
+                        f"diagnostic:{diagnostic.diagnostic_hash}",
+                        f"package:{spec.theme_id}@{package.version}",
+                        f"universe:{spec.theme_id}@{package.universe.version}",
+                        f"proxy:{instrument}",
+                    ),
+                    is_independent=True,
+                    observed_or_inferred="inferred",
+                )
+            )
+
+        diagnostics_tuple = tuple(
+            sorted(diagnostics, key=lambda item: item.instrument)
+        )
+        observations_tuple = tuple(
+            sorted(
+                observations,
+                key=lambda item: item.source_ref.split(":")[3],
+            )
         )
         return MarketObservationBatch(
             theme_id=spec.theme_id,
             cycle_as_of=cycle_as_of,
             market_as_of=market_as_of,
-            observations=(),
-            diagnostics=(diagnostic,),
-            input_hash=canonical_hash([diagnostic.input_hash]),
+            observations=observations_tuple,
+            diagnostics=diagnostics_tuple,
+            input_hash=canonical_hash(
+                sorted(item.input_hash for item in diagnostics_tuple)
+            ),
             spec_hash=spec_hash,
             config_hash=config_hash,
         )
@@ -641,9 +845,14 @@ def adapt_market_observations(
         input_hash=input_hash,
         spec_hash=spec_hash,
         config_hash=config_hash,
-        evidence_refs=(market_source_ref,),
+        evidence_refs=(
+            market_source_ref,
+            f"package:{spec.theme_id}@{package.version}",
+            f"universe:{spec.theme_id}@{package.universe.version}",
+        ),
         warnings=tuple(warnings),
     )
+    diagnostic = _with_diagnostic_hash(diagnostic)
     source_ref = (
         f"market_observation:{spec.theme_id}:{spec.mode.value}:"
         f"{spec.theme_id}:{market_as_of}:{input_hash[:12]}"
@@ -663,6 +872,7 @@ def adapt_market_observations(
         support_direction=direction,
         evidence_refs=(
             market_source_ref,
+            f"diagnostic:{diagnostic.diagnostic_hash}",
             f"package:{spec.theme_id}@{package.version}",
             f"universe:{spec.theme_id}@{package.universe.version}",
         ),
