@@ -998,3 +998,40 @@ def test_replay_interfaces_are_publicly_importable():
         "run_replay_cycle",
     ):
         assert getattr(decision_lab, name) is not None
+
+
+
+def test_package_definition_and_universe_theme_mismatch_is_rejected():
+    package_a = _package(theme="ThemeA")
+    package_b = _package(theme="ThemeB")
+    mismatched = replace(package_a, universe=package_b.universe)
+    theme_input = ThemeReplayInput(
+        package=mismatched,
+        market_spec=_spec("ThemeA"),
+        market_config=MarketObservationConfig(),
+        bars=(),
+        market_source_ref="fixture:mismatch",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="theme package definition and universe disagree",
+    ):
+        run_replay_cycle(_cycle(themes=(theme_input,)))
+
+
+@pytest.mark.parametrize(
+    ("field_name", "message"),
+    [
+        ("theme_id", "external observation theme_id must be non-empty"),
+        ("source_ref", "external observation source_ref must be non-empty"),
+    ],
+)
+def test_external_observation_requires_auditable_identity(field_name, message):
+    observation = _radar_observation("Rates")
+    invalid = replace(observation, **{field_name: "   "})
+
+    with pytest.raises(ValueError, match=message):
+        run_replay_cycle(
+            _cycle(external_observations=(invalid,))
+        )
