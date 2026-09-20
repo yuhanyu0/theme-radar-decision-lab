@@ -950,22 +950,29 @@ def test_same_independent_source_counts_once_with_contradiction_precedence():
     assert state.contradicting_source_refs == ("same",)
 
 
-def test_conflicting_source_metadata_is_rejected():
+def test_conflicting_source_metadata_is_rejected_even_with_no_horizons():
     first = _independent("T", "same", SupportDirection.SUPPORTING)
-    second = replace(
+    record = _archive(observations=(first,))
+    result = record.replay_result
+    conflicting = replace(
         first,
         source_type="industry_primary",
     )
-    record = _archive(observations=(first, second))
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            combined_observations=(
+                *result.combined_observations,
+                conflicting,
+            ),
+        )
+    )
 
     with pytest.raises(
         ValueError,
         match="conflicting cohort source metadata",
     ):
-        _independent_evidence_state(
-            record.replay_result,
-            "T",
-        )
+        evaluate_replay_cohort((bad,), horizons=())
 ```
 
 - [ ] **Step 2: Add RED registered-theme/routing-intent fixtures**
@@ -1266,6 +1273,48 @@ def _routing_intent(
     raise ValueError("unsupported forced-review allocation state")
 ```
 
+After defining `_routing_intent` and `_independent_evidence_state`, extend `_validate_replay_semantics` with a final pass so semantic validation does not depend on requested horizons:
+
+```python
+    for item in result.theme_records:
+        _routing_intent(item)
+        _independent_evidence_state(result, item.theme_id)
+```
+
+This makes forced-review state and source-metadata conflicts fail closed even when `horizons=()`.
+
+Add:
+
+```python
+def test_forced_review_mismatch_is_rejected_even_with_no_horizons():
+    record = _registered_archive(
+        themes=("RiskTheme",),
+        observations=(
+            _independent(
+                "RiskTheme",
+                "risk",
+                SupportDirection.CONTRADICTING,
+            ),
+        ),
+    )
+    result = record.replay_result
+    allocation = replace(result.allocations[0], forced_review=False)
+    theme_record = replace(
+        result.theme_records[0],
+        allocation=allocation,
+    )
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            allocations=(allocation,),
+            theme_records=(theme_record,),
+        )
+    )
+
+    with pytest.raises(ValueError, match="forced-review flag mismatch"):
+        evaluate_replay_cohort((bad,), horizons=())
+```
+
 - [ ] **Step 6: Run Task-2 tests and full regression**
 
 Run:
@@ -1359,6 +1408,10 @@ def test_future_not_present_is_not_scan_only_or_no_observation():
     assert (
         row.contradiction_transition
         is ContradictionTransition.UNASSESSED
+    )
+    assert not any(
+        item.source_cycle_index == 0 and item.theme_id == "Other"
+        for item in result.transitions
     )
 
 
@@ -1586,17 +1639,182 @@ def _system_fields(item: ReplayThemeRecord):
 
 - [ ] **Step 5: Implement one transition builder**
 
-Implement `_build_transition` so it:
-1. derives source routing intent/evidence/system fields;
-2. handles right-censor with all future fields None;
-3. handles existing future cycle + absent theme as NOT_PRESENT;
-4. handles PRESENT future theme, including future NO_OBSERVATION;
-5. computes evidence counts/deltas only when future presence is PRESENT;
-6. sets `evidence_class_changed` only when both evidence states have independent sources;
-7. sets scanner_config_changed only when both hashes exist;
-8. computes tier transition with `_tier_transition`.
+Add:
 
-Use exact field names from `ReplayCohortTransition`; do not add an intermediate public structure.
+```python
+def _build_transition(
+    *,
+    source_index: int,
+    source_record: ReplayArchiveRecord,
+    future_index: int | None,
+    future_record: ReplayArchiveRecord | None,
+    horizon: int,
+    source_theme_record: ReplayThemeRecord,
+) -> ReplayCohortTransition:
+    theme_id = source_theme_record.theme_id
+    source_evidence = _independent_evidence_state(
+        source_record.replay_result,
+        theme_id,
+    )
+    source_system = _system_fields(source_theme_record)
+    routing_intent = _routing_intent(source_theme_record)
+
+    future_theme_record = None
+    if future_record is None:
+        future_presence = FuturePresence.RIGHT_CENSORED
+    else:
+        future_by_theme = {
+            item.theme_id: item
+            for item in future_record.replay_result.theme_records
+        }
+        future_theme_record = future_by_theme.get(theme_id)
+        future_presence = (
+            FuturePresence.NOT_PRESENT
+            if future_theme_record is None
+            else FuturePresence.PRESENT
+        )
+
+    future_evidence = (
+        None
+        if future_theme_record is None
+        else _independent_evidence_state(
+            future_record.replay_result,
+            theme_id,
+        )
+    )
+    future_system = (
+        None
+        if future_theme_record is None
+        else _system_fields(future_theme_record)
+    )
+
+    if (
+        future_evidence is not None
+        and source_evidence.independent_source_count > 0
+        and future_evidence.independent_source_count > 0
+    ):
+        evidence_class_changed = (
+            source_evidence.evidence_class
+            is not future_evidence.evidence_class
+        )
+    else:
+        evidence_class_changed = None
+
+    support_delta = (
+        None
+        if future_presence is not FuturePresence.PRESENT
+        else (
+            future_evidence.supporting_source_count
+            - source_evidence.supporting_source_count
+        )
+    )
+    contradiction_delta = (
+        None
+        if future_presence is not FuturePresence.PRESENT
+        else (
+            future_evidence.contradicting_source_count
+            - source_evidence.contradicting_source_count
+        )
+    )
+
+    source_scanner_hash = source_system["scanner_config_hash"]
+    future_scanner_hash = (
+        None
+        if future_system is None
+        else future_system["scanner_config_hash"]
+    )
+    scanner_config_changed = (
+        None
+        if source_scanner_hash is None or future_scanner_hash is None
+        else source_scanner_hash != future_scanner_hash
+    )
+
+    source_tier = source_system["tier"]
+    future_tier = (
+        None if future_system is None else future_system["tier"]
+    )
+
+    return ReplayCohortTransition(
+        source_cycle_index=source_index,
+        future_cycle_index=future_index,
+        source_cycle_as_of=source_record.cycle_as_of,
+        future_cycle_as_of=(
+            None if future_record is None else future_record.cycle_as_of
+        ),
+        horizon_cycles=horizon,
+        source_archive_record_hash=source_record.archive_record_hash,
+        future_archive_record_hash=(
+            None
+            if future_record is None
+            else future_record.archive_record_hash
+        ),
+        theme_id=theme_id,
+        routing_intent=routing_intent,
+        source_registered=source_theme_record.registered,
+        future_presence=future_presence,
+        future_registered=(
+            None
+            if future_theme_record is None
+            else future_theme_record.registered
+        ),
+        source_evidence_state=source_evidence,
+        future_evidence_state=future_evidence,
+        support_delta=support_delta,
+        contradiction_delta=contradiction_delta,
+        contradiction_transition=_contradiction_transition(
+            source_evidence,
+            future_evidence,
+            future_presence,
+        ),
+        evidence_class_changed=evidence_class_changed,
+        source_replay_status=source_theme_record.replay_status,
+        future_replay_status=(
+            None
+            if future_theme_record is None
+            else future_theme_record.replay_status
+        ),
+        source_scanner_config_hash=source_scanner_hash,
+        future_scanner_config_hash=future_scanner_hash,
+        scanner_config_changed=scanner_config_changed,
+        source_priority=source_system["priority"],
+        future_priority=(
+            None if future_system is None else future_system["priority"]
+        ),
+        priority_delta=_delta(
+            source_system["priority"],
+            None if future_system is None else future_system["priority"],
+        ),
+        source_confidence=source_system["confidence"],
+        future_confidence=(
+            None if future_system is None else future_system["confidence"]
+        ),
+        confidence_delta=_delta(
+            source_system["confidence"],
+            None if future_system is None else future_system["confidence"],
+        ),
+        source_novelty=source_system["novelty"],
+        future_novelty=(
+            None if future_system is None else future_system["novelty"]
+        ),
+        novelty_delta=_delta(
+            source_system["novelty"],
+            None if future_system is None else future_system["novelty"],
+        ),
+        source_lifecycle=source_system["lifecycle"],
+        future_lifecycle=(
+            None if future_system is None else future_system["lifecycle"]
+        ),
+        source_forced_review=source_system["forced_review"],
+        future_forced_review=(
+            None if future_system is None else future_system["forced_review"]
+        ),
+        source_tier=source_tier,
+        future_tier=future_tier,
+        tier_transition=_tier_transition(source_tier, future_tier),
+    )
+```
+
+For `RIGHT_CENSORED` and `NOT_PRESENT`, `future_theme_record` is None, so all future theme/evidence/system fields remain None. For `PRESENT + NO_OBSERVATION`, `future_system` contains None scanner/allocation fields while `future_evidence_state` is a real `NO_INDEPENDENT` state.
 
 - [ ] **Step 6: Implement deterministic transition enumeration**
 
@@ -1899,6 +2117,11 @@ def test_summary_mean_counts_match_non_none_transition_deltas():
             if item.confidence_delta is not None
         ]
         assert summary.confidence_delta_n == len(confidence)
+        assert summary.mean_confidence_delta == (
+            None
+            if not confidence
+            else pytest.approx(sum(confidence) / len(confidence))
+        )
 
         novelty = [
             item.novelty_delta
@@ -1906,6 +2129,11 @@ def test_summary_mean_counts_match_non_none_transition_deltas():
             if item.novelty_delta is not None
         ]
         assert summary.novelty_delta_n == len(novelty)
+        assert summary.mean_novelty_delta == (
+            None
+            if not novelty
+            else pytest.approx(sum(novelty) / len(novelty))
+        )
 ```
 
 - [ ] **Step 3: Add RED hash/order/public-export tests**
@@ -2226,21 +2454,24 @@ git commit -m "test: prove replay cohort walk-forward evaluation"
 Append:
 
 ```python
-def test_forced_review_flag_mismatch_is_rejected():
+def test_non_forced_allocation_cannot_claim_forced_capacity_exhausted():
     record = _registered_archive(
-        themes=("RiskTheme",),
+        themes=("FullTheme",),
         observations=(
             _independent(
-                "RiskTheme",
-                "risk",
-                SupportDirection.CONTRADICTING,
+                "FullTheme",
+                "support",
+                SupportDirection.SUPPORTING,
             ),
         ),
     )
     result = record.replay_result
     allocation = replace(
         result.allocations[0],
-        forced_review=False,
+        allocation_reasons=(
+            *result.allocations[0].allocation_reasons,
+            "forced review capacity exhausted",
+        ),
     )
     theme_record = replace(
         result.theme_records[0],
@@ -2254,8 +2485,11 @@ def test_forced_review_flag_mismatch_is_rejected():
         )
     )
 
-    with pytest.raises(ValueError, match="forced-review flag mismatch"):
-        evaluate_replay_cohort((bad,), horizons=(1,))
+    with pytest.raises(
+        ValueError,
+        match="unsupported forced-review allocation state",
+    ):
+        evaluate_replay_cohort((bad,), horizons=())
 
 
 def test_cycle_timestamp_mismatch_is_rejected():
