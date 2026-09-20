@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -932,3 +932,58 @@ def test_market_observation_interfaces_are_publicly_importable():
         "load_market_observation_spec",
     ):
         assert getattr(decision_lab, name) is not None
+
+
+
+def test_string_mode_cannot_bypass_market_observation_mode_validation():
+    spec = MarketObservationSpec(
+        theme_id="Genomics_Bio",
+        mode="proxy",
+        benchmark="SPY",
+        proxies=(),
+    )
+
+    with pytest.raises(ValueError, match="unsupported market observation mode"):
+        spec.validate()
+
+
+def test_basket_coverage_hash_binds_attempted_member_bars_and_final_diagnostic():
+    package = _package(
+        candidates=[_candidate("A", effective_from="2026-01-01")]
+    )
+    benchmark = _series("SPY", [100, 100, 100, 100, 100])
+    first_bars = benchmark + _series("A", [100, 100, 100, 100, 101])
+    second_bars = benchmark + _series("A", [100, 100, 100, 100, 150])
+
+    first = adapt_market_observations(
+        package=package,
+        bars=first_bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:coverage-hash",
+    )
+    second = adapt_market_observations(
+        package=package,
+        bars=second_bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:coverage-hash",
+    )
+
+    first_diag = first.diagnostics[0]
+    second_diag = second.diagnostics[0]
+    assert first_diag.status is MarketObservationStatus.COVERAGE_PENDING
+    assert first_diag.current_member_symbols == ("A",)
+    assert first_diag.input_hash != second_diag.input_hash
+    assert first.input_hash != second.input_hash
+
+    payload = asdict(first_diag)
+    payload["diagnostic_hash"] = None
+    assert first_diag.diagnostic_hash == canonical_hash(payload)
+    assert f"package:DataCenter_Infra@{package.version}" in first_diag.evidence_refs
+    assert (
+        f"universe:DataCenter_Infra@{package.universe.version}"
+        in first_diag.evidence_refs
+    )
