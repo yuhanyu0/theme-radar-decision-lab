@@ -601,6 +601,7 @@ Define:
         ORDINARY_FULL_RESEARCH = "ORDINARY_FULL_RESEARCH"
         FORCED_FULL_REVIEW = "FORCED_FULL_REVIEW"
         FORCED_REVIEW_CAPACITY_MISSED = "FORCED_REVIEW_CAPACITY_MISSED"
+        FORCED_REVIEW_UNREGISTERED = "FORCED_REVIEW_UNREGISTERED"
 
 ## 33. Routing intent derivation
 
@@ -625,11 +626,25 @@ If:
 
 If:
 
+    registered is True
     scan_result.forced_review is True
     allocation.forced_review is True
     allocation.tier == SCAN_ONLY
     "forced review capacity exhausted"
         in allocation.allocation_reasons
+
+### FORCED_REVIEW_UNREGISTERED
+
+If:
+
+    registered is False
+    scan_result.forced_review is True
+    allocation.forced_review is True
+    allocation.tier == SCAN_ONLY
+    "theme not registered"
+        in allocation.allocation_reasons
+
+This is a valid existing allocator state: the scanner can surface an independent contradiction for an unknown theme, but the allocator cannot spend a registered-theme research slot on it.
 
 ### ORDINARY_FULL_RESEARCH
 
