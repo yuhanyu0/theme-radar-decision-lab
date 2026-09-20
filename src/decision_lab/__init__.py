@@ -40,6 +40,16 @@ from .replay import (
     ThemeReplayInput,
     run_replay_cycle,
 )
+from .replay_archive import (
+    ArchiveDestinationVisibility,
+    ReplayArchiveRecord,
+    ReplayArchiveWriteResult,
+    build_replay_archive_record,
+    read_replay_archive,
+    replay_archive_path,
+    verify_replay_archive,
+    write_replay_archive,
+)
 from .research_budget import (
     ResearchAllocation,
     ResearchBudgetAllocator,
@@ -69,6 +79,7 @@ from .themes import (
 from .universe import Candidate, ThemeLayer, ThemeUniverse
 
 __all__ = [
+    "ArchiveDestinationVisibility",
     "BiotechClinicalAdapter",
     "BiotechClinicalEvidence",
     "Candidate",
@@ -89,6 +100,8 @@ __all__ = [
     "MarketObservationStatus",
     "NormalizedCompanyEvidence",
     "PlaybookRouting",
+    "ReplayArchiveRecord",
+    "ReplayArchiveWriteResult",
     "ReplayCycleInput",
     "ReplayCycleResult",
     "ReplayStatus",
@@ -114,6 +127,7 @@ __all__ = [
     "ThemeUniverse",
     "adapt_market_observations",
     "assess_tape_state",
+    "build_replay_archive_record",
     "canonical_hash",
     "compile_decision",
     "evaluate_forward_outcomes",
@@ -128,9 +142,13 @@ __all__ = [
     "make_evidence",
     "missed_upside",
     "rank_themes",
+    "read_replay_archive",
+    "replay_archive_path",
     "rolling_linkage",
     "route_playbooks",
     "run_replay_cycle",
     "summarize_decisions",
+    "verify_replay_archive",
     "write_immutable_json",
+    "write_replay_archive",
 ]
