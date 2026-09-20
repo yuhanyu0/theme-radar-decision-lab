@@ -1,6 +1,5 @@
 from copy import deepcopy
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -118,15 +117,15 @@ def _theme_input(package=None, bars=()):
 
 
 def _cycle(**changes):
-    payload = dict(
-        cycle_as_of="2026-09-19",
-        themes=(),
-        external_observations=(),
-        prior_scan_results=(),
-        prior_allocations=(),
-        scanner_config=ScannerConfig(),
-        budget_config=ResearchBudgetConfig(),
-    )
+    payload = {
+        "cycle_as_of": "2026-09-19",
+        "themes": (),
+        "external_observations": (),
+        "prior_scan_results": (),
+        "prior_allocations": (),
+        "scanner_config": ScannerConfig(),
+        "budget_config": ResearchBudgetConfig(),
+    }
     payload.update(changes)
     return ReplayCycleInput(**payload)
 
