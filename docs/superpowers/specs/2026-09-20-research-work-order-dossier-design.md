@@ -346,7 +346,6 @@ Define frozen dataclass:
     ResearchWorkOrderPolicy
       version: str = "0.1"
       theme_reassessment_dimensions: tuple[str, ...]
-      generic_company_dimensions: tuple[str, ...]
       industrials_company_dimensions: tuple[str, ...]
       biotech_company_dimensions: tuple[str, ...]
       minimum_independent_sources: int = 2
@@ -370,18 +369,21 @@ Default:
 
 These are coverage requirements, not scores.
 
-## 23. Default generic company dimensions
+## 23. Generic company adapter boundary
 
-Default:
+GenericEvidenceAdapter preserves raw facts but does not establish a domain-specific normalized company contract.
 
-    (
-      "growth",
-      "margin_quality",
-      "demand_visibility",
-      "cash_generation",
-      "balance_sheet_strength",
-      "thesis_risk",
-    )
+Therefore COMPANY_DEEP_DIVE in v0.1 rejects:
+
+    evidence_adapter == "generic"
+
+with:
+
+    ValueError("generic adapter is not eligible for company deep dive")
+
+This avoids a fake universal company-completion standard.
+
+THEME_REASSESSMENT is unaffected because it does not require company normalization.
 
 ## 24. Default industrials-company dimensions
 
@@ -754,8 +756,7 @@ Version 0.1 supports:
     "biotech_clinical"
       -> BiotechClinicalAdapter
 
-    "generic"
-      -> GenericEvidenceAdapter
+GenericEvidenceAdapter is intentionally not used for COMPANY_DEEP_DIVE in v0.1.
 
 Unknown adapter names raise:
 
@@ -1620,3 +1621,16 @@ A manually constructed or tampered ResearchWorkOrder is rejected:
     ValueError("invalid research work order")
 
 The dossier builder does not trust a hash-shaped string merely because it is present.
+
+
+## 102. Generic-adapter rejection acceptance
+
+Construct a registered FULL research source with ThemePackage.evidence_adapter == "generic".
+
+Attempt COMPANY_DEEP_DIVE.
+
+Required:
+
+    ValueError("generic adapter is not eligible for company deep dive")
+
+Do not generate an impossible work order whose normalized evidence requirements can never be satisfied.
