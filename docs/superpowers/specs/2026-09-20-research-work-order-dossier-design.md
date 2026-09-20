@@ -650,23 +650,35 @@ among ResearchEvidenceBinding values with:
 
 Multiple evidence records from the same source_ref count once.
 
-The executor does not infer independence from source_type.
+The executor does not infer independence positively from source_type.
 
 The caller must state the independence claim explicitly.
+
+However fail-closed guards apply:
+
+- source_type == "radar_model_output" cannot be marked independent;
+- evidence.is_observed_fact == False cannot be marked independent.
+
+These inputs raise:
+
+    ValueError("model or inferred evidence cannot be marked independent")
+
+Derived features may be marked independent only when their underlying EvidenceRecord is explicitly marked observed fact.
 
 ## 41. Independence-metadata consistency
 
 For the same source_ref within one dossier:
 
     independent
+    source_type
 
-must be consistent across all bindings.
+must each be consistent across all bindings.
 
 Conflict raises:
 
-    ValueError("conflicting research source independence")
+    ValueError("conflicting research source metadata")
 
-This prevents one source from being counted as both independent and non-independent.
+This prevents one source from being counted under incompatible independence/source identities.
 
 ## 42. Requirement coverage from evidence
 
@@ -675,12 +687,18 @@ A THEME_EVIDENCE requirement is satisfied if at least one valid binding has:
     target_ticker is None
     requirement.dimension in binding.dimensions
 
-A COMPANY_EVIDENCE requirement is satisfied if at least one valid binding has:
+A COMPANY_EVIDENCE requirement is satisfied only if both are true:
 
-    target_ticker == requirement.target_ticker
-    requirement.dimension in binding.dimensions
+1. at least one valid binding has:
 
-Coverage is presence/traceability only.
+       target_ticker == requirement.target_ticker
+       requirement.dimension in binding.dimensions
+
+2. the target's normalized company evidence has a non-None field with the exact requirement.dimension name.
+
+Therefore a binding cannot merely claim that a dimension was covered while the adapter produced no corresponding normalized value.
+
+Coverage is traceability + usable normalized field presence.
 
 It is not a positive thesis verdict.
 
@@ -702,7 +720,8 @@ Rules:
 - adapter_name must equal work_order.evidence_adapter;
 - evidence_source_hashes unique and lexical;
 - every referenced hash must exist in dossier evidence;
-- every referenced evidence record must be bound to the same ticker or the work-order theme.
+- every referenced evidence record must be bound to the same ticker or the work-order theme;
+- evidence cited as raw-fact support must be ticker-specific to the submission ticker.
 
 ## 44. Raw-fact support rule
 
@@ -710,9 +729,14 @@ Every:
 
     raw_facts[key] = value
 
-must appear with exact semantic equality in at least one cited EvidenceRecord.payload:
+must appear with type-sensitive canonical semantic equality in at least one cited ticker-specific EvidenceRecord.payload.
 
-    evidence.payload[key] == value
+Use:
+
+    canonical_hash({"value": evidence.payload[key]})
+      == canonical_hash({"value": value})
+
+rather than permissive Python equality, so True is not treated as 1 and 1 is not silently treated as 1.0.
 
 Otherwise:
 
@@ -887,11 +911,13 @@ Rules:
 
 OBSERVED_SYNTHESIS:
 
+- direction must be non-None;
 - at least one evidence hash required;
 - every cited evidence record must have is_observed_fact == True.
 
 INFERENCE:
 
+- direction must be non-None;
 - at least one evidence hash required;
 - may cite observed facts and/or non-observed/model evidence.
 
@@ -1555,3 +1581,42 @@ with:
 - deterministic semantic hashes;
 - all existing tests green;
 - changed-files Ruff green.
+
+
+## 99. Company requirement field-name contract
+
+For COMPANY_EVIDENCE requirements, dimension names are intentionally the exact public dataclass field names on NormalizedCompanyEvidence or BiotechClinicalEvidence.
+
+Before evaluating coverage:
+
+- require hasattr(normalized_evidence, dimension);
+- read the attribute;
+- require it is not None.
+
+If a policy dimension is not a valid normalized-evidence field for the selected adapter:
+
+    raise ValueError("company requirement dimension is unsupported by adapter")
+
+This prevents policy/schema drift from silently making completion impossible or falsely complete.
+
+## 100. Evidence-binding canonicalization
+
+build_research_dossier reconstructs canonical ResearchEvidenceBinding values rather than trusting caller ordering.
+
+For each binding:
+
+- evidence is validated;
+- dimensions are stripped only of surrounding whitespace, must remain non-empty, deduplicated, and sorted;
+- target_ticker is uppercased when present.
+
+Two bindings with the same evidence.source_hash are rejected rather than merged.
+
+## 101. Work-order validation before dossier execution
+
+build_research_dossier must independently validate work_order_hash by recomputing the complete work-order semantic payload.
+
+A manually constructed or tampered ResearchWorkOrder is rejected:
+
+    ValueError("invalid research work order")
+
+The dossier builder does not trust a hash-shaped string merely because it is present.
