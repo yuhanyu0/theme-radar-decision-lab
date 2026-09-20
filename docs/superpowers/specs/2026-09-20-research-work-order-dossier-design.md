@@ -528,13 +528,22 @@ Operational wall-clock metadata is outside the semantic object.
 
 ## 33. Research evidence input
 
-Increment 8 consumes existing EvidenceRecord objects.
+Increment 8 accepts explicit ResearchEvidenceInput values:
+
+    ResearchEvidenceInput
+      evidence: EvidenceRecord
+      independent: bool
+      direction: ResearchEvidenceDirection
+      dimensions: tuple[str, ...]
+      target_ticker: str | None
 
 It must not call:
 
     make_evidence()
 
 because make_evidence assigns retrieved_at from the ambient clock.
+
+ResearchEvidenceInput is an input container only; the final dossier does not retain the mutable EvidenceRecord.payload mapping directly.
 
 ## 34. EvidenceRecord hash validation
 
@@ -563,12 +572,36 @@ Direction means relevance to the current research question.
 
 It is not a trade direction.
 
-## 36. ResearchEvidenceBinding
+## 36. FrozenResearchEvidence and ResearchEvidenceBinding
 
 Define frozen dataclass:
 
+    FrozenResearchEvidence
+      evidence_id: str
+      source_hash: str
+      payload_hash: str
+      observed_at: str
+      retrieved_at: str | None
+      market_asof: str | None
+      ticker: str | None
+      theme: str | None
+      source_type: str
+      source_ref: str
+      fact_type: str
+      is_observed_fact: bool
+      model_version: str | None
+      notes: str | None
+
+payload_hash is:
+
+    canonical_hash(evidence.payload)
+
+The payload itself is not embedded in the dossier. Its complete content remains committed by EvidenceRecord.source_hash and payload_hash.
+
+Define frozen canonical output dataclass:
+
     ResearchEvidenceBinding
-      evidence: EvidenceRecord
+      evidence: FrozenResearchEvidence
       independent: bool
       direction: ResearchEvidenceDirection
       dimensions: tuple[str, ...]
@@ -777,7 +810,34 @@ For every CompanyResearchSubmission, build:
 
 Then normalize using the validated adapter.
 
-The resulting NormalizedCompanyEvidence or BiotechClinicalEvidence is stored in the dossier.
+Do not store the adapter's mutable raw_facts mapping inside the final dossier.
+
+Instead convert the normalized object into an immutable snapshot:
+
+    NormalizedCompanyField
+      name: str
+      value: float | int | str
+
+    NormalizedCompanySnapshot
+      ticker: str
+      as_of: str
+      adapter_name: str
+      source_coverage: str
+      provenance: tuple[str, ...]
+      fields: tuple[NormalizedCompanyField, ...]
+      normalized_payload_hash: str
+
+fields contains every non-None normalized public field except:
+
+    ticker
+    as_of
+    source_coverage
+    provenance
+    raw_facts
+
+ordered lexically by field name.
+
+normalized_payload_hash commits to the complete asdict(normalized_evidence), including raw_facts, before the mutable mapping is discarded from the output.
 
 ## 47. CompanyEvidence as-of validation
 
@@ -789,14 +849,14 @@ If outside that half-open execution interval:
 
     raise ValueError("company research as_of is outside execution window")
 
-## 48. Linkage input
+## 48. Linkage input and immutable snapshots
 
-Define frozen dataclass:
+Define frozen input dataclass:
 
     CompanyLinkageSubmission
       ticker: str
       linkage: LinkageResult | None = None
-      hierarchical_linkage: HierarchicalLinkageResult | None = None
+      hierarchical_linkage: HierarchicalLinkageSnapshot | None = None
 
 Rules:
 
@@ -806,6 +866,30 @@ Rules:
 - one submission per target.
 
 No linkage calculation is performed inside Increment 8.
+
+LinkageResult contains only immutable scalar fields and may be copied directly.
+
+HierarchicalLinkageResult contains a mutable coefficients mapping. The final dossier therefore stores:
+
+    HierarchicalLinkageSnapshot
+      target: str
+      status: str
+      window: int
+      observations: int
+      theme_correlation: float | None
+      theme_beta: float | None
+      r2: float | None
+      incremental_theme_r2: float | None
+      residual_mean: float | None
+      residual_vol: float | None
+      circularity_warning: bool
+      missing_controls: tuple[str, ...]
+      coefficients: tuple[tuple[str, float], ...]
+      source_payload_hash: str
+
+coefficients are lexical by control name.
+
+source_payload_hash commits to asdict(HierarchicalLinkageResult) before snapshot conversion.
 
 ## 49. CompanyLinkageStatus
 
@@ -852,7 +936,7 @@ Define frozen dataclass:
 
     CompanyResearchAssessment
       ticker: str
-      normalized_evidence: NormalizedCompanyEvidence
+      normalized_evidence: NormalizedCompanySnapshot
       evidence_source_hashes: tuple[str, ...]
       independent_source_count: int
       covered_dimensions: tuple[str, ...]
@@ -1586,13 +1670,15 @@ with:
 
 ## 99. Company requirement field-name contract
 
-For COMPANY_EVIDENCE requirements, dimension names are intentionally the exact public dataclass field names on NormalizedCompanyEvidence or BiotechClinicalEvidence.
+For COMPANY_EVIDENCE requirements, dimension names are intentionally the exact public dataclass field names produced by the selected adapter.
 
-Before evaluating coverage:
+Before snapshot conversion, evaluate coverage against the adapter output:
 
 - require hasattr(normalized_evidence, dimension);
 - read the attribute;
 - require it is not None.
+
+After conversion, the same dimension must appear in NormalizedCompanySnapshot.fields.
 
 If a policy dimension is not a valid normalized-evidence field for the selected adapter:
 
@@ -1602,15 +1688,18 @@ This prevents policy/schema drift from silently making completion impossible or 
 
 ## 100. Evidence-binding canonicalization
 
-build_research_dossier reconstructs canonical ResearchEvidenceBinding values rather than trusting caller ordering.
+build_research_dossier converts ResearchEvidenceInput into canonical ResearchEvidenceBinding snapshots rather than retaining caller objects.
 
-For each binding:
+For each input:
 
-- evidence is validated;
+- EvidenceRecord is validated;
+- FrozenResearchEvidence is created;
 - dimensions are stripped only of surrounding whitespace, must remain non-empty, deduplicated, and sorted;
 - target_ticker is uppercased when present.
 
-Two bindings with the same evidence.source_hash are rejected rather than merged.
+Two inputs with the same evidence.source_hash are rejected rather than merged.
+
+Mutating the caller's original EvidenceRecord.payload after dossier construction must not change the dossier or its hashes.
 
 ## 101. Work-order validation before dossier execution
 
@@ -1634,3 +1723,31 @@ Required:
     ValueError("generic adapter is not eligible for company deep dive")
 
 Do not generate an impossible work order whose normalized evidence requirements can never be satisfied.
+
+
+## 103. Immutable nested-state acceptance
+
+After building a dossier:
+
+1. mutate the original EvidenceRecord.payload mapping;
+2. mutate the original CompanyResearchSubmission.raw_facts mapping;
+3. mutate the original HierarchicalLinkageResult.coefficients mapping.
+
+Required:
+
+- ResearchDossier remains exactly equal to its pre-mutation value;
+- dossier_hash remains unchanged;
+- stored FrozenResearchEvidence, NormalizedCompanySnapshot, and HierarchicalLinkageSnapshot remain unchanged.
+
+This proves frozen dataclass semantics are not undermined by caller-owned mutable mappings.
+
+## 104. ResearchEvidenceInput independence acceptance
+
+Reject:
+
+- radar_model_output with independent=True;
+- any EvidenceRecord with is_observed_fact=False and independent=True.
+
+Allow the same records with independent=False.
+
+Independence is explicit but cannot elevate model/inferred evidence into independent observed evidence.
