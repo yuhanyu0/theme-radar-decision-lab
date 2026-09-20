@@ -10,7 +10,8 @@ from decision_lab.market_observation import (
     MarketObservationStatus,
     adapt_market_observations,
 )
-from decision_lab.scanner import SupportDirection
+from decision_lab.ledger import canonical_hash
+from decision_lab.scanner import ScannerConfig, SupportDirection, rank_themes
 from decision_lab.themes import ThemeDefinition, ThemeKeyPolicy, ThemePackage
 from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
@@ -576,3 +577,204 @@ def test_too_few_current_members_returns_coverage_pending_and_no_observation():
     assert batch.observations == ()
     assert batch.diagnostics[0].status is MarketObservationStatus.COVERAGE_PENDING
     assert "too few current basket members" in batch.diagnostics[0].reason
+
+
+
+def _proxy_spec():
+    return MarketObservationSpec(
+        theme_id="Genomics_Bio",
+        mode=MarketObservationMode.PROXY,
+        benchmark="SPY",
+        proxies=("ARKG", "XBI"),
+        current_return_sessions=2,
+        prior_return_sessions=2,
+        min_basket_members=2,
+        version="test",
+    )
+
+
+def test_proxy_mode_emits_supporting_and_neutral_observations_in_lexical_order():
+    package = _package(theme="Genomics_Bio")
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("ARKG", [100, 100, 100, 110, 120])
+        + _series("XBI", [100, 100, 100, 100.5, 101])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_proxy_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:proxy",
+    )
+
+    assert [d.instrument for d in batch.diagnostics] == ["ARKG", "XBI"]
+    assert [o.support_direction for o in batch.observations] == [
+        SupportDirection.SUPPORTING,
+        SupportDirection.NEUTRAL,
+    ]
+    assert all(d.breadth is None for d in batch.diagnostics)
+    assert all(o.breadth_signal is None for o in batch.observations)
+
+
+def test_negative_weak_proxy_is_contradicting():
+    package = _package(theme="Genomics_Bio")
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("ARKG", [100, 100, 100, 95, 90])
+    )
+    spec = replace(_proxy_spec(), proxies=("ARKG",))
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=spec,
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:proxy",
+    )
+
+    assert batch.observations[0].support_direction is SupportDirection.CONTRADICTING
+
+
+def test_one_missing_proxy_does_not_suppress_valid_proxy():
+    package = _package(theme="Genomics_Bio")
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("ARKG", [100, 100, 100, 110, 120])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_proxy_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:proxy",
+    )
+
+    assert [o.source_ref.split(":")[3] for o in batch.observations] == ["ARKG"]
+    by_instrument = {d.instrument: d for d in batch.diagnostics}
+    assert by_instrument["ARKG"].status is MarketObservationStatus.READY
+    assert by_instrument["XBI"].status is MarketObservationStatus.COVERAGE_PENDING
+
+
+def test_all_missing_proxies_emit_no_observations():
+    package = _package(theme="Genomics_Bio")
+    bars = _series("SPY", [100, 100, 100, 100, 100])
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_proxy_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:proxy",
+    )
+
+    assert batch.observations == ()
+    assert all(
+        d.status is MarketObservationStatus.COVERAGE_PENDING
+        for d in batch.diagnostics
+    )
+
+
+def test_output_provenance_and_scanner_contract_are_directly_compatible():
+    package = _package(theme="Genomics_Bio")
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("ARKG", [100, 100, 100, 110, 120])
+    )
+    spec = replace(_proxy_spec(), proxies=("ARKG",))
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=spec,
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:proxy",
+    )
+    observation = batch.observations[0]
+    diag = batch.diagnostics[0]
+
+    assert observation.source_type == "derived_feature"
+    assert observation.is_independent
+    assert observation.observed_or_inferred == "inferred"
+    assert observation.source_ref.startswith(
+        "market_observation:Genomics_Bio:proxy:ARKG:2026-09-15:"
+    )
+    assert "fixture:proxy" in observation.evidence_refs
+    assert "proxy:ARKG" in observation.evidence_refs
+    assert f"package:Genomics_Bio@{package.version}" in observation.evidence_refs
+    assert f"universe:Genomics_Bio@{package.universe.version}" in observation.evidence_refs
+    assert f"diagnostic:{diag.diagnostic_hash}" in observation.evidence_refs
+
+    results = rank_themes(
+        batch.observations,
+        {"Genomics_Bio": package.definition},
+        (),
+        ScannerConfig(),
+        cycle_as_of="2026-09-15",
+    )
+    assert results[0].independent_support_count == 1
+
+
+def test_input_order_and_unrelated_symbol_do_not_change_semantic_output_or_hash():
+    package = _package(theme="Genomics_Bio")
+    base = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("ARKG", [100, 100, 100, 110, 120])
+    )
+    spec = replace(_proxy_spec(), proxies=("ARKG",))
+
+    first = adapt_market_observations(
+        package=package,
+        bars=base,
+        spec=spec,
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:proxy",
+    )
+    second = adapt_market_observations(
+        package=package,
+        bars=list(reversed(base))
+        + [
+            MarketBar(
+                symbol="UNRELATED",
+                session_date="bad-date",
+                available_at="2099-01-01",
+                close=-100,
+            )
+        ],
+        spec=spec,
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:proxy",
+    )
+
+    assert second == first
+
+
+def test_source_level_and_batch_hashes_bind_only_used_bars():
+    package = _package(theme="Genomics_Bio")
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("ARKG", [100, 100, 100, 110, 120])
+        + _series("XBI", [100, 100, 100, 100.5, 101])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_proxy_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:proxy",
+    )
+
+    source_hashes = sorted(d.input_hash for d in batch.diagnostics)
+    assert batch.input_hash == canonical_hash(source_hashes)
+    assert all(d.diagnostic_hash for d in batch.diagnostics)
