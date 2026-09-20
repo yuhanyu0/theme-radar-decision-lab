@@ -1139,6 +1139,39 @@ def test_routing_intent_distinguishes_forced_full_and_capacity_missed():
     )
 ```
 
+Add:
+
+```python
+def test_routing_intent_distinguishes_theme_research_and_scan_only():
+    low_novelty = replace(
+        _independent(
+            "ResearchTheme",
+            "independent:research",
+            SupportDirection.SUPPORTING,
+        ),
+        novelty_signal=0.1,
+    )
+    theme_research = _registered_archive(
+        themes=("ResearchTheme",),
+        observations=(low_novelty,),
+    )
+    assert (
+        _routing_intent(
+            theme_research.replay_result.theme_records[0]
+        )
+        is RoutingIntent.ORDINARY_THEME_RESEARCH
+    )
+
+    scan_only = _archive(
+        observations=(_radar("Rates"),),
+    )
+    assert (
+        _routing_intent(scan_only.replay_result.theme_records[0])
+        is RoutingIntent.SCAN_ONLY
+    )
+```
+
+
 - [ ] **Step 3: Run Task-2 tests and verify RED**
 
 Run:
@@ -1540,6 +1573,51 @@ def test_contradiction_transition_with_comparable_independent_evidence(
         source_direction is not future_direction
     )
 ```
+
+Add:
+
+```python
+@pytest.mark.parametrize(
+    ("source", "future", "expected"),
+    [
+        (
+            ResearchTier.SCAN_ONLY,
+            ResearchTier.SCAN_ONLY,
+            TierTransition.SAME,
+        ),
+        (
+            ResearchTier.SCAN_ONLY,
+            ResearchTier.THEME_RESEARCH,
+            TierTransition.ESCALATED,
+        ),
+        (
+            ResearchTier.THEME_RESEARCH,
+            ResearchTier.FULL_DECISION_RESEARCH,
+            TierTransition.ESCALATED,
+        ),
+        (
+            ResearchTier.FULL_DECISION_RESEARCH,
+            ResearchTier.SCAN_ONLY,
+            TierTransition.DEESCALATED,
+        ),
+        (
+            None,
+            ResearchTier.SCAN_ONLY,
+            TierTransition.UNASSESSED,
+        ),
+        (
+            ResearchTier.SCAN_ONLY,
+            None,
+            TierTransition.UNASSESSED,
+        ),
+    ],
+)
+def test_tier_transition_ordering(source, future, expected):
+    from decision_lab.replay_cohort import _tier_transition
+
+    assert _tier_transition(source, future) is expected
+```
+
 
 - [ ] **Step 3: Run Task-3 tests and verify RED**
 
