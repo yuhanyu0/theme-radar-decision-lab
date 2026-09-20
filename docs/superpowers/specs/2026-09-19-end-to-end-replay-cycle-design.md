@@ -187,9 +187,12 @@ If package.definition is not effective at cycle_as_of:
 
     raise ValueError("theme package not effective at cycle_as_of")
 
-cycle_date is the UTC date represented by cycle_as_of.
+cycle_date is derived deterministically:
 
-For date-only cycle_as_of, use that date directly.
+- if cycle_as_of is date-only, use that date directly;
+- otherwise parse the ISO timestamp, normalize it to UTC, and use the resulting UTC date.
+
+Version 0.1 expects ThemeDefinition effective_from/effective_to to be ISO date strings, matching current repository theme packages.
 
 A future package may not participate in an earlier replay.
 
@@ -420,24 +423,69 @@ theme_records:
 
 The orchestrator may reorder scanner/budget outputs into lexical theme order for the replay artifact without changing their content.
 
-## 17. Universe semantic hash
+## 17. Definition and universe semantic hashes
+
+Do not hash whole dataclasses merely because they are available.
+
+The replay input hash should bind fields that affect this replay's behavior or audit identity, while ignoring display/annotation fields that the current pipeline never reads.
+
+### 17.1 Theme definition semantic payload
+
+Use:
+
+    definition_semantic_payload =
+      {
+        "theme_id": definition.theme_id,
+        "lifecycle_state": definition.lifecycle_state.value,
+        "effective_from": definition.effective_from,
+        "effective_to": definition.effective_to,
+        "version": definition.version,
+        "provenance": list(definition.provenance),
+      }
+
+Then:
+
+    definition_semantic_hash =
+        canonical_hash(definition_semantic_payload)
+
+Do not bind current replay hashing to:
+
+- display_name;
+- aliases;
+- parent/child metadata;
+- thesis_summary;
+- economic_chain_description;
+- benchmark_stack.
+
+Those fields do not affect MarketObservationAdapter, Scanner, ResearchBudgetAllocator, or package-active validation in Increment 5.
+
+### 17.2 Universe semantic payload
 
 Do not rely only on ThemeUniverse.version.
 
-Define a deterministic semantic payload:
+Use:
 
-    {
-      "theme": universe.theme,
-      "version": universe.version,
-      "layers": [
-        asdict(layer)
-        sorted by layer.name
-      ],
-      "candidates": [
-        asdict(candidate)
-        sorted by uppercase ticker
-      ]
-    }
+    universe_semantic_payload =
+      {
+        "theme": universe.theme,
+        "version": universe.version,
+        "layers": [
+            layer.name
+            sorted lexically
+        ],
+        "candidates": [
+            {
+              "ticker": candidate.ticker.upper(),
+              "theme": candidate.theme,
+              "layer": candidate.layer,
+              "membership_state": candidate.membership_state,
+              "effective_from": candidate.effective_from,
+              "effective_to": candidate.effective_to,
+              "provenance": list(candidate.provenance),
+            }
+            sorted by uppercase ticker
+        ]
+      }
 
 Then:
 
@@ -446,23 +494,16 @@ Then:
 
 Exclude:
 
-    universe.generated_at
+- universe.generated_at;
+- ThemeLayer.description;
+- Candidate.expression_role;
+- Candidate.economic_exposure;
+- Candidate.evidence_strength;
+- Candidate.notes.
 
-because generated_at does not affect replay behavior and would make semantically identical universes hash differently.
+Those fields are not read by the Increment-5 replay path.
 
-Candidate semantic content includes, among other fields:
-
-- ticker;
-- theme;
-- layer;
-- membership_state;
-- expression_role;
-- economic_exposure;
-- evidence_strength;
-- effective_from;
-- effective_to;
-- provenance;
-- notes.
+If a future replay stage begins using one of them, that field must be added to the semantic payload in the same increment.
 
 ## 18. Theme replay semantic payload
 
@@ -471,7 +512,7 @@ For each registered ThemeReplayInput, derive:
     theme_replay_semantic_payload =
       {
         "theme_id": ...,
-        "definition": asdict(package.definition),
+        "definition_semantic_hash": ...,
         "package_version": package.version,
         "universe_version": package.universe.version,
         "universe_semantic_hash": ...,
@@ -485,7 +526,8 @@ Do not include:
 
 - package.source_path;
 - universe.generated_at;
-- unrelated unused raw bars.
+- unrelated unused raw bars;
+- definition/universe annotation fields explicitly excluded above.
 
 package.source_path is an I/O location, not replay semantics.
 
@@ -724,18 +766,21 @@ Version 0.1 must prove all of these leave input_hash, result_hash, and semantic 
 5. reverse prior_allocations order;
 6. add unrelated unused bars to a theme's bar tuple;
 7. change ThemeUniverse.generated_at only;
-8. change ThemePackage.source_path only.
+8. change ThemePackage.source_path only;
+9. change Candidate.notes/expression_role/economic_exposure/evidence_strength only;
+10. change ThemeDefinition display_name/thesis_summary only.
 
 And all of these must change input_hash:
 
-9. change a used bar close;
-10. change a candidate effective_from/effective_to;
-11. change a candidate provenance field;
-12. change ThemeDefinition lifecycle_state;
-13. change scanner config;
-14. change budget config;
-15. change an external observation payload;
-16. change prior allocation history.
+11. change a used bar close;
+12. change a candidate effective_from/effective_to;
+13. change a candidate provenance field;
+14. change ThemeDefinition lifecycle_state;
+15. change ThemeDefinition effective_from/effective_to;
+16. change scanner config;
+17. change budget config;
+18. change an external observation payload;
+19. change prior allocation history.
 
 ## 25. Functional acceptance tests
 
@@ -851,3 +896,16 @@ Increment 5 is complete when:
 - forbidden downstream modules remain unchanged;
 - all existing + new tests pass;
 - changed-files Ruff passes.
+
+
+## 30. Replay input validation details
+
+Additional fail-closed validation:
+
+- cycle_as_of must parse as ISO date or ISO datetime;
+- ThemeReplayInput.market_source_ref must be non-empty after strip;
+- package.definition.theme_id must be non-empty;
+- duplicate registered theme IDs are rejected before any adapter call;
+- ReplayCycleInput may contain zero registered themes if external observations exist;
+- an entirely empty replay (no registered themes and no external observations) is valid and returns empty stage tuples plus deterministic hashes;
+- prior history alone does not create a current ReplayThemeRecord.
