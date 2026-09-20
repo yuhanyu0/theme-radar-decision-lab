@@ -586,3 +586,227 @@ def test_forced_review_mismatch_is_rejected_even_with_no_horizons():
 
     with pytest.raises(ValueError, match="forced-review flag mismatch"):
         evaluate_replay_cohort((bad,), horizons=())
+
+
+
+def test_one_cycle_emits_right_censored_rows_for_every_horizon():
+    source = _archive()
+    result = evaluate_replay_cohort(
+        (source,),
+        horizons=(1, 3),
+    )
+
+    assert len(result.transitions) == 2
+    assert {
+        item.horizon_cycles for item in result.transitions
+    } == {1, 3}
+    for item in result.transitions:
+        assert item.future_presence is FuturePresence.RIGHT_CENSORED
+        assert item.future_cycle_index is None
+        assert item.future_cycle_as_of is None
+        assert item.future_evidence_state is None
+        assert item.future_tier is None
+        assert item.priority_delta is None
+        assert (
+            item.contradiction_transition
+            is ContradictionTransition.UNASSESSED
+        )
+        assert item.tier_transition is TierTransition.UNASSESSED
+
+
+def test_future_not_present_is_not_scan_only_or_no_observation():
+    source = _archive(cycle_as_of="2026-09-19")
+    future = _archive(
+        cycle_as_of="2026-09-20",
+        observations=(_radar("Other", as_of="2026-09-20"),),
+    )
+
+    result = evaluate_replay_cohort(
+        (source, future),
+        horizons=(1,),
+    )
+    row = next(
+        item
+        for item in result.transitions
+        if item.source_cycle_index == 0
+        and item.theme_id == "Rates"
+    )
+
+    assert row.future_presence is FuturePresence.NOT_PRESENT
+    assert row.future_registered is None
+    assert row.future_replay_status is None
+    assert row.future_evidence_state is None
+    assert row.future_tier is None
+    assert row.future_priority is None
+    assert row.priority_delta is None
+    assert row.tier_transition is TierTransition.UNASSESSED
+    assert (
+        row.contradiction_transition
+        is ContradictionTransition.UNASSESSED
+    )
+    assert not any(
+        item.source_cycle_index == 0 and item.theme_id == "Other"
+        for item in result.transitions
+    )
+
+
+def test_future_present_no_observation_stays_distinct():
+    source = _registered_archive(
+        cycle_as_of="2026-09-19",
+        themes=("Quiet",),
+        observations=(),
+    )
+    future = _registered_archive(
+        cycle_as_of="2026-09-20",
+        themes=("Quiet",),
+        observations=(),
+    )
+
+    result = evaluate_replay_cohort(
+        (source, future),
+        horizons=(1,),
+    )
+    row = result.transitions[0]
+
+    assert row.future_presence is FuturePresence.PRESENT
+    assert row.future_replay_status is ReplayStatus.NO_OBSERVATION
+    assert row.future_tier is None
+    assert (
+        row.future_evidence_state.evidence_class
+        is EvidenceClass.NO_INDEPENDENT
+    )
+
+
+def test_contradiction_requires_independent_evidence_on_both_sides():
+    source = _archive(cycle_as_of="2026-09-19")
+    future = _archive(
+        cycle_as_of="2026-09-20",
+        observations=(
+            _independent(
+                "Rates",
+                "independent:risk",
+                SupportDirection.CONTRADICTING,
+                as_of="2026-09-20",
+            ),
+        ),
+    )
+
+    row = evaluate_replay_cohort(
+        (source, future),
+        horizons=(1,),
+    ).transitions[0]
+
+    assert (
+        row.source_evidence_state.evidence_class
+        is EvidenceClass.NO_INDEPENDENT
+    )
+    assert (
+        row.contradiction_transition
+        is ContradictionTransition.UNASSESSED
+    )
+    assert row.evidence_class_changed is None
+
+
+@pytest.mark.parametrize(
+    ("source_direction", "future_direction", "expected"),
+    [
+        (
+            SupportDirection.SUPPORTING,
+            SupportDirection.CONTRADICTING,
+            ContradictionTransition.EMERGED,
+        ),
+        (
+            SupportDirection.CONTRADICTING,
+            SupportDirection.CONTRADICTING,
+            ContradictionTransition.PERSISTED,
+        ),
+        (
+            SupportDirection.CONTRADICTING,
+            SupportDirection.SUPPORTING,
+            ContradictionTransition.RESOLVED,
+        ),
+        (
+            SupportDirection.SUPPORTING,
+            SupportDirection.SUPPORTING,
+            ContradictionTransition.ABSENT,
+        ),
+    ],
+)
+def test_contradiction_transition_with_comparable_independent_evidence(
+    source_direction,
+    future_direction,
+    expected,
+):
+    source = _archive(
+        cycle_as_of="2026-09-19",
+        observations=(
+            _independent(
+                "T",
+                "source",
+                source_direction,
+                as_of="2026-09-19",
+            ),
+        ),
+    )
+    future = _archive(
+        cycle_as_of="2026-09-20",
+        observations=(
+            _independent(
+                "T",
+                "future",
+                future_direction,
+                as_of="2026-09-20",
+            ),
+        ),
+    )
+
+    row = evaluate_replay_cohort(
+        (source, future),
+        horizons=(1,),
+    ).transitions[0]
+
+    assert row.contradiction_transition is expected
+    assert row.evidence_class_changed is (
+        source_direction is not future_direction
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "future", "expected"),
+    [
+        (
+            ResearchTier.SCAN_ONLY,
+            ResearchTier.SCAN_ONLY,
+            TierTransition.SAME,
+        ),
+        (
+            ResearchTier.SCAN_ONLY,
+            ResearchTier.THEME_RESEARCH,
+            TierTransition.ESCALATED,
+        ),
+        (
+            ResearchTier.THEME_RESEARCH,
+            ResearchTier.FULL_DECISION_RESEARCH,
+            TierTransition.ESCALATED,
+        ),
+        (
+            ResearchTier.FULL_DECISION_RESEARCH,
+            ResearchTier.SCAN_ONLY,
+            TierTransition.DEESCALATED,
+        ),
+        (
+            None,
+            ResearchTier.SCAN_ONLY,
+            TierTransition.UNASSESSED,
+        ),
+        (
+            ResearchTier.SCAN_ONLY,
+            None,
+            TierTransition.UNASSESSED,
+        ),
+    ],
+)
+def test_tier_transition_ordering(source, future, expected):
+    from decision_lab.replay_cohort import _tier_transition
+
+    assert _tier_transition(source, future) is expected
