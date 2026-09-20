@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
+from itertools import pairwise
 from statistics import mean
 
 from .ledger import canonical_hash
@@ -688,7 +689,7 @@ def _normalize_records(
         rows.append((_parse_cycle_utc(record.cycle_as_of), record))
 
     rows.sort(key=lambda pair: pair[0])
-    for left, right in zip(rows, rows[1:], strict=False):
+    for left, right in pairwise(rows):
         if left[0] == right[0]:
             raise ValueError("ambiguous cohort cycle")
 
