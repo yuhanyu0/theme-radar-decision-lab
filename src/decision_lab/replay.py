@@ -102,9 +102,7 @@ def _definition_is_effective(
 
     if effective_from is not None and cycle_date < effective_from:
         return False
-    if effective_to is not None and cycle_date >= effective_to:
-        return False
-    return True
+    return effective_to is None or cycle_date < effective_to
 
 
 def _definition_semantic_payload(
