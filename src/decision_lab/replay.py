@@ -180,6 +180,28 @@ def _allocation_sort_key(item: ResearchAllocation) -> tuple[str, str, str]:
     )
 
 
+def _theme_replay_semantic_payload(
+    theme_input: ThemeReplayInput,
+    batch: MarketObservationBatch,
+) -> dict[str, object]:
+    package = theme_input.package
+    return {
+        "theme_id": package.definition.theme_id,
+        "definition_semantic_hash": _definition_semantic_hash(
+            package.definition
+        ),
+        "package_version": package.version,
+        "universe_version": package.universe.version,
+        "universe_semantic_hash": _universe_semantic_hash(
+            package.universe
+        ),
+        "market_spec_hash": batch.spec_hash,
+        "market_config_hash": batch.config_hash,
+        "market_input_hash": batch.input_hash,
+        "market_source_ref": theme_input.market_source_ref,
+    }
+
+
 def _validate_replay_input(
     replay_input: ReplayCycleInput,
 ) -> tuple[date, tuple[ThemeReplayInput, ...]]:
@@ -330,14 +352,28 @@ def run_replay_cycle(
 
     theme_records_tuple = tuple(theme_records)
 
-    # Task 3 replaces this deliberately coarse input hash with the
-    # approved semantic-input payload. Task 2 only establishes orchestration.
-    input_hash = canonical_hash(
-        {
-            "cycle_as_of": replay_input.cycle_as_of,
-            "stage": "orchestration-v0",
-        }
-    )
+    input_payload = {
+        "cycle_as_of": replay_input.cycle_as_of,
+        "registered_themes": [
+            _theme_replay_semantic_payload(
+                theme_input,
+                batch_by_theme[theme_input.package.definition.theme_id],
+            )
+            for theme_input in sorted_themes
+        ],
+        "external_observations": [
+            asdict(item) for item in sorted_external
+        ],
+        "prior_scan_results": [
+            asdict(item) for item in sorted_prior_scans
+        ],
+        "prior_allocations": [
+            asdict(item) for item in sorted_prior_allocations
+        ],
+        "scanner_config": asdict(replay_input.scanner_config),
+        "budget_config": asdict(replay_input.budget_config),
+    }
+    input_hash = canonical_hash(input_payload)
     result_payload = {
         "cycle_as_of": replay_input.cycle_as_of,
         "input_hash": input_hash,
