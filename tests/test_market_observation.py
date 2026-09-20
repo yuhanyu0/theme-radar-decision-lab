@@ -986,3 +986,38 @@ def test_basket_coverage_hash_binds_attempted_member_bars_and_final_diagnostic()
         f"universe:DataCenter_Infra@{package.universe.version}"
         in first_diag.evidence_refs
     )
+
+
+
+@pytest.mark.parametrize("bad_scale", [float("nan"), float("inf")])
+def test_normalization_scales_must_be_finite_and_positive(bad_scale):
+    config = replace(
+        MarketObservationConfig(),
+        relative_strength_scale=bad_scale,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="normalization scales must be finite and positive",
+    ):
+        config.validate()
+
+
+def test_insufficient_benchmark_diagnostic_keeps_package_universe_provenance():
+    package = _package()
+    batch = adapt_market_observations(
+        package=package,
+        bars=[_bar("SPY", "2026-09-19", 100)],
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-19",
+        market_source_ref="fixture:benchmark-short",
+    )
+
+    diagnostic = batch.diagnostics[0]
+    assert "fixture:benchmark-short" in diagnostic.evidence_refs
+    assert f"package:DataCenter_Infra@{package.version}" in diagnostic.evidence_refs
+    assert (
+        f"universe:DataCenter_Infra@{package.universe.version}"
+        in diagnostic.evidence_refs
+    )
