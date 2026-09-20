@@ -268,6 +268,20 @@ Create tests/test_replay.py with:
             )
 
 
+    def test_offset_aware_cycle_uses_utc_date_for_package_activation():
+        package = _package(effective_from="2026-09-20")
+
+        result = run_replay_cycle(
+            _cycle(
+                cycle_as_of="2026-09-19T23:30:00-04:00",
+                themes=(_theme_input(package),),
+            )
+        )
+
+        assert result.theme_records[0].theme_id == "TestTheme"
+        assert result.theme_records[0].replay_status is ReplayStatus.NO_OBSERVATION
+
+
     def test_market_source_ref_must_be_nonempty():
         package = _package()
         bad = replace(
@@ -831,6 +845,50 @@ Append helpers:
         return copied
 
 
+    def _prior_scan(theme, as_of, *, priority=0.5):
+        from decision_lab.scanner import ThemeScanResult
+
+        return ThemeScanResult(
+            theme_id=theme,
+            as_of=as_of,
+            discovery_score=0.5,
+            structural_score=0.5,
+            persistence_score=0.5,
+            breadth_score=0.5,
+            relative_strength_score=0.5,
+            novelty_score=0.1,
+            evidence_confidence=0.5,
+            independent_support_count=1,
+            independent_contradiction_count=0,
+            lifecycle_recommendation="no_change",
+            research_priority=priority,
+            forced_review=False,
+            forced_review_severity=0,
+            forced_review_reasons=(),
+            reasons=(),
+            evidence_refs=(f"prior:{theme}",),
+            config_hash="prior",
+            registry_version=None,
+            prior_result_refs=(),
+        )
+
+
+    def _prior_allocation(theme, as_of, *, effective_priority=0.5):
+        from decision_lab.research_budget import ResearchAllocation, ResearchTier
+
+        return ResearchAllocation(
+            theme_id=theme,
+            as_of=as_of,
+            tier=ResearchTier.SCAN_ONLY,
+            scan_priority=0.5,
+            effective_priority=effective_priority,
+            scan_novelty_score=0.1,
+            forced_review=False,
+            allocation_reasons=("prior",),
+            source_scan_result_hash=f"prior:{theme}",
+        )
+
+
     def test_input_order_is_semantically_irrelevant():
         a = _ready_theme_input(package=_package(theme="A"))
         b = _ready_theme_input(package=_package(theme="B"))
@@ -851,6 +909,33 @@ Append helpers:
         )
 
         assert second == first
+
+
+    def test_prior_history_order_is_semantically_irrelevant():
+        current = _radar_observation("Rates")
+        scan_a = _prior_scan("A", "2026-09-17")
+        scan_b = _prior_scan("B", "2026-09-18")
+        allocation_a = _prior_allocation("A", "2026-09-17")
+        allocation_b = _prior_allocation("B", "2026-09-18")
+
+        first = run_replay_cycle(
+            _cycle(
+                external_observations=(current,),
+                prior_scan_results=(scan_a, scan_b),
+                prior_allocations=(allocation_a, allocation_b),
+            )
+        )
+        second = run_replay_cycle(
+            _cycle(
+                external_observations=(current,),
+                prior_scan_results=(scan_b, scan_a),
+                prior_allocations=(allocation_b, allocation_a),
+            )
+        )
+
+        assert second == first
+        assert second.input_hash == first.input_hash
+        assert second.result_hash == first.result_hash
 
 
     def test_reversing_raw_bar_order_does_not_change_hashes():
@@ -964,9 +1049,12 @@ Append helpers:
             "candidate_effective_from",
             "candidate_provenance",
             "definition_lifecycle",
+            "definition_effective_from",
+            "definition_provenance",
             "scanner_config",
             "budget_config",
             "external_observation",
+            "prior_allocation_history",
         ],
     )
     def test_semantic_changes_move_replay_input_hash(mutation):
@@ -996,6 +1084,24 @@ Append helpers:
                 ),
             )
             kwargs["themes"] = (_ready_theme_input(package=changed),)
+        elif mutation == "definition_effective_from":
+            changed = replace(
+                base_theme.package,
+                definition=replace(
+                    base_theme.package.definition,
+                    effective_from="2025-12-31",
+                ),
+            )
+            kwargs["themes"] = (_ready_theme_input(package=changed),)
+        elif mutation == "definition_provenance":
+            changed = replace(
+                base_theme.package,
+                definition=replace(
+                    base_theme.package.definition,
+                    provenance=("different:definition",),
+                ),
+            )
+            kwargs["themes"] = (_ready_theme_input(package=changed),)
         elif mutation == "scanner_config":
             kwargs["scanner_config"] = replace(
                 ScannerConfig(),
@@ -1009,6 +1115,14 @@ Append helpers:
         elif mutation == "external_observation":
             kwargs["external_observations"] = (
                 _radar_observation("Rates", discovery=0.9),
+            )
+        elif mutation == "prior_allocation_history":
+            kwargs["prior_allocations"] = (
+                _prior_allocation(
+                    "TestTheme",
+                    "2026-09-18",
+                    effective_priority=0.6,
+                ),
             )
 
         baseline = run_replay_cycle(
