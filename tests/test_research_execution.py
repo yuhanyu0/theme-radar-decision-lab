@@ -2,7 +2,9 @@ from dataclasses import replace
 
 import pytest
 
+from decision_lab.hierarchical import HierarchicalLinkageResult
 from decision_lab.ledger import canonical_hash
+from decision_lab.linkage import LinkageResult
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.market_observation import (
     MarketBar,
@@ -19,12 +21,19 @@ from decision_lab.research_execution import (
     ResearchMode,
     ResearchRequirementScope,
     ResearchEvidenceDirection,
+    CompanyLinkageStatus,
+    CompanyLinkageSubmission,
+    CompanyResearchSubmission,
     ResearchEvidenceInput,
     ResearchFinding,
     ResearchFindingKind,
     ResearchWorkOrderPolicy,
+    _build_company_assessments,
     _freeze_evidence_inputs,
+    _linkage_status,
+    _normalize_company_submissions,
     _normalize_findings,
+    _normalize_linkage_submissions,
     _parse_utc,
     build_research_work_order,
 )
@@ -769,3 +778,332 @@ def test_unresolved_finding_can_be_evidence_free_but_has_no_direction():
 
     assert findings[0].kind is ResearchFindingKind.UNRESOLVED
     assert findings[0].direction is None
+
+
+
+def _company_order(adapter="industrials_infrastructure"):
+    record, package = _registered_archive(adapter=adapter)
+    return build_research_work_order(
+        record,
+        "WorkTheme",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=package,
+        target_tickers=("AAA",),
+    )
+
+
+def _one_company_binding(order, evidence, dimensions):
+    return _freeze_evidence_inputs(
+        (
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=ResearchEvidenceDirection.SUPPORTING,
+                dimensions=dimensions,
+                target_ticker="AAA",
+            ),
+        ),
+        order=order,
+        evidence_as_of=_parse_utc("2026-09-20"),
+    )
+
+
+def test_company_raw_fact_requires_same_ticker_evidence():
+    order = _company_order()
+    theme_evidence = _evidence(
+        evidence_id="theme",
+        source_ref="industry:theme",
+        ticker=None,
+        payload={"revenue_growth": 0.2},
+    )
+    _, originals = _one_company_binding(
+        order,
+        theme_evidence,
+        ("growth",),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="company raw fact is unsupported by cited evidence",
+    ):
+        _normalize_company_submissions(
+            (
+                CompanyResearchSubmission(
+                    ticker="AAA",
+                    as_of="2026-09-20",
+                    adapter_name="industrials_infrastructure",
+                    raw_facts={"revenue_growth": 0.2},
+                    evidence_source_hashes=(theme_evidence.source_hash,),
+                ),
+            ),
+            order=order,
+            evidence=originals,
+            evidence_as_of=_parse_utc("2026-09-20"),
+        )
+
+
+def test_type_sensitive_raw_fact_support_rejects_bool_for_one():
+    order = _company_order()
+    evidence = _evidence(
+        evidence_id="aaa",
+        source_ref="sec:aaa",
+        ticker="AAA",
+        payload={"revenue_growth": True},
+    )
+    _, originals = _one_company_binding(order, evidence, ("growth",))
+
+    with pytest.raises(
+        ValueError,
+        match="company raw fact is unsupported by cited evidence",
+    ):
+        _normalize_company_submissions(
+            (
+                CompanyResearchSubmission(
+                    ticker="AAA",
+                    as_of="2026-09-20",
+                    adapter_name="industrials_infrastructure",
+                    raw_facts={"revenue_growth": 1},
+                    evidence_source_hashes=(evidence.source_hash,),
+                ),
+            ),
+            order=order,
+            evidence=originals,
+            evidence_as_of=_parse_utc("2026-09-20"),
+        )
+
+
+def test_declared_company_dimension_does_not_create_missing_normalized_field():
+    order = _company_order()
+    evidence = _evidence(
+        evidence_id="aaa",
+        source_ref="sec:aaa",
+        ticker="AAA",
+        payload={"unrelated": 1},
+    )
+    _, originals = _one_company_binding(order, evidence, ("growth",))
+    snapshots = _normalize_company_submissions(
+        (
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of="2026-09-20",
+                adapter_name="industrials_infrastructure",
+                raw_facts={"unrelated": 1},
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        ),
+        order=order,
+        evidence=originals,
+        evidence_as_of=_parse_utc("2026-09-20"),
+    )
+
+    assert "growth" not in {
+        item.name for item in snapshots["AAA"].fields
+    }
+
+
+def test_industrials_adapter_snapshot_preserves_domain_fields():
+    order = _company_order("industrials_infrastructure")
+    evidence = _evidence(
+        evidence_id="aaa",
+        source_ref="sec:aaa",
+        ticker="AAA",
+        payload={
+            "revenue_growth": 0.2,
+            "gross_margin": 0.3,
+            "backlog_growth": 0.4,
+        },
+    )
+    _, originals = _one_company_binding(
+        order,
+        evidence,
+        ("growth", "margin_quality", "demand_visibility"),
+    )
+    snapshots = _normalize_company_submissions(
+        (
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of="2026-09-20",
+                adapter_name="industrials_infrastructure",
+                raw_facts=dict(evidence.payload),
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        ),
+        order=order,
+        evidence=originals,
+        evidence_as_of=_parse_utc("2026-09-20"),
+    )
+    fields_by_name = {
+        item.name: item.value for item in snapshots["AAA"].fields
+    }
+    assert fields_by_name["growth"] is not None
+    assert fields_by_name["margin_quality"] is not None
+    assert fields_by_name["demand_visibility"] is not None
+
+
+def test_biotech_adapter_snapshot_preserves_clinical_fields():
+    order = _company_order("biotech_clinical")
+    evidence = _evidence(
+        evidence_id="aaa",
+        source_ref="ir:aaa",
+        ticker="AAA",
+        payload={
+            "clinical_phase": "Phase 2",
+            "endpoint_status": "met",
+            "regulatory_state": "active",
+            "cash_runway_months": 24,
+            "days_to_material_catalyst": 45,
+            "platform_validation": 0.8,
+            "partnered_economics": 0.7,
+        },
+    )
+    _, originals = _one_company_binding(
+        order,
+        evidence,
+        (
+            "clinical_phase",
+            "endpoint_status",
+            "regulatory_state",
+            "cash_runway_months",
+            "days_to_material_catalyst",
+            "platform_validation",
+            "partnered_economics",
+        ),
+    )
+    snapshots = _normalize_company_submissions(
+        (
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of="2026-09-20",
+                adapter_name="biotech_clinical",
+                raw_facts=dict(evidence.payload),
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        ),
+        order=order,
+        evidence=originals,
+        evidence_as_of=_parse_utc("2026-09-20"),
+    )
+    fields_by_name = {
+        item.name: item.value for item in snapshots["AAA"].fields
+    }
+    assert fields_by_name["clinical_phase"] == "Phase 2"
+    assert fields_by_name["cash_runway_months"] == 24
+
+
+def _usable_linkage():
+    return LinkageResult(
+        ticker="AAA",
+        control_name="theme-minus-AAA",
+        window=63,
+        correlation=0.6,
+        beta=0.9,
+        r2=0.4,
+        residual_mean=0.0,
+        residual_vol=0.02,
+        beta_stability=0.8,
+        decoupling_score=0.3,
+        circularity_warning=False,
+        observations=63,
+    )
+
+
+def test_circular_linkage_status_is_not_usable():
+    order = _company_order()
+    linkage = replace(_usable_linkage(), circularity_warning=True)
+    linkage_map = _normalize_linkage_submissions(
+        (
+            CompanyLinkageSubmission(
+                ticker="AAA",
+                linkage=linkage,
+            ),
+        ),
+        order=order,
+    )
+    simple, hierarchical = linkage_map["AAA"]
+
+    assert (
+        _linkage_status(simple, hierarchical)
+        is CompanyLinkageStatus.CIRCULARITY_WARNING
+    )
+
+
+def test_hierarchical_coefficients_are_frozen():
+    order = _company_order()
+    coefficients = {"SPY": 0.4, "WorkTheme": 0.6}
+    hierarchical = HierarchicalLinkageResult(
+        target="AAA",
+        status="ok",
+        window=63,
+        observations=63,
+        theme_correlation=0.6,
+        theme_beta=0.6,
+        r2=0.5,
+        incremental_theme_r2=0.2,
+        residual_mean=0.0,
+        residual_vol=0.02,
+        circularity_warning=False,
+        missing_controls=(),
+        coefficients=coefficients,
+    )
+    linkage_map = _normalize_linkage_submissions(
+        (
+            CompanyLinkageSubmission(
+                ticker="AAA",
+                hierarchical_linkage=hierarchical,
+            ),
+        ),
+        order=order,
+    )
+    snapshot = linkage_map["AAA"][1]
+    coefficients["SPY"] = 99.0
+
+    assert snapshot.coefficients == (
+        ("SPY", 0.4),
+        ("WorkTheme", 0.6),
+    )
+
+
+def test_company_submission_timestamp_before_source_cycle_is_rejected():
+    order = _company_order()
+    evidence = _evidence(
+        evidence_id="aaa",
+        source_ref="sec:aaa",
+        ticker="AAA",
+        payload={"revenue_growth": 0.2},
+    )
+    _, originals = _one_company_binding(order, evidence, ("growth",))
+
+    with pytest.raises(
+        ValueError,
+        match="company research as_of is outside execution window",
+    ):
+        _normalize_company_submissions(
+            (
+                CompanyResearchSubmission(
+                    "AAA",
+                    "2026-09-18",
+                    "industrials_infrastructure",
+                    {"revenue_growth": 0.2},
+                    (evidence.source_hash,),
+                ),
+            ),
+            order=order,
+            evidence=originals,
+            evidence_as_of=_parse_utc("2026-09-20"),
+        )
+
+
+def test_non_finite_linkage_is_rejected():
+    order = _company_order()
+    bad = replace(_usable_linkage(), beta=float("nan"))
+
+    with pytest.raises(ValueError, match="must be finite"):
+        _normalize_linkage_submissions(
+            (
+                CompanyLinkageSubmission(
+                    ticker="AAA",
+                    linkage=bad,
+                ),
+            ),
+            order=order,
+        )
