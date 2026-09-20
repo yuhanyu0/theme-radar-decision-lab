@@ -544,7 +544,7 @@ def adapt_market_observations(
     outperforming = 0
     intervals = 0
     for start, end in zip(
-        current_sessions,
+        current_sessions[:-1],
         current_sessions[1:],
         strict=True,
     ):
