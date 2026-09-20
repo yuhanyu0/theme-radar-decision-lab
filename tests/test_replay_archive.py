@@ -1,6 +1,6 @@
-from dataclasses import asdict, replace
 import json
 import os
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -22,8 +22,6 @@ from decision_lab.replay import (
 )
 from decision_lab.replay_archive import (
     ArchiveDestinationVisibility,
-    ReplayArchiveRecord,
-    ReplayArchiveWriteResult,
     build_replay_archive_record,
     read_replay_archive,
     replay_archive_path,
