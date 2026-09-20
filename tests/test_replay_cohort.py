@@ -530,6 +530,28 @@ def test_routing_intent_distinguishes_forced_full_and_capacity_missed():
     )
 
 
+def test_routing_intent_classifies_unregistered_forced_review():
+    record = _archive(
+        observations=(
+            _independent(
+                "UnknownRisk",
+                "unknown:risk",
+                SupportDirection.CONTRADICTING,
+            ),
+        )
+    )
+    item = record.replay_result.theme_records[0]
+
+    assert item.registered is False
+    assert item.scan_result.forced_review
+    assert item.allocation.tier is ResearchTier.SCAN_ONLY
+    assert "theme not registered" in item.allocation.allocation_reasons
+    assert (
+        _routing_intent(item)
+        is RoutingIntent.FORCED_REVIEW_UNREGISTERED
+    )
+
+
 def test_routing_intent_distinguishes_theme_research_and_scan_only():
     low_novelty = replace(
         _independent(
