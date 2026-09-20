@@ -94,8 +94,13 @@ class MarketObservationConfig:
     proxy_contradiction_persistence_max: float = 0.40
 
     def validate(self) -> None:
-        if self.relative_strength_scale <= 0 or self.novelty_scale <= 0:
-            raise ValueError("normalization scales must be positive")
+        if (
+            not isfinite(self.relative_strength_scale)
+            or not isfinite(self.novelty_scale)
+            or self.relative_strength_scale <= 0
+            or self.novelty_scale <= 0
+        ):
+            raise ValueError("normalization scales must be finite and positive")
         for value in (
             self.basket_support_breadth_min,
             self.basket_contradiction_breadth_max,
@@ -394,7 +399,11 @@ def _coverage_diagnostic(
         input_hash=input_hash,
         spec_hash=spec_hash,
         config_hash=config_hash,
-        evidence_refs=(market_source_ref,),
+        evidence_refs=(
+            market_source_ref,
+            f"package:{spec.theme_id}@{package.version}",
+            f"universe:{spec.theme_id}@{package.universe.version}",
+        ),
     )
     return _with_diagnostic_hash(diagnostic)
 
