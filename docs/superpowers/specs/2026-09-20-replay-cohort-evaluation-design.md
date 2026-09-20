@@ -11,7 +11,7 @@ Evaluate historical replay archives as a cohort without pretending that research
 
 Target question:
 
-    When the system spent more research attention on a theme,
+    When the system allocated more research attention to a theme,
     did later replay cycles contain more/new independent evidence change,
     and how did the system state subsequently evolve?
 
@@ -295,6 +295,27 @@ Within each cycle require:
 - unique ResearchAllocation.theme_id;
 - unique ReplayThemeRecord.theme_id.
 
+Also require exact top-level coverage:
+
+    set(scan_result.theme_id)
+      == set(routed theme_record.theme_id)
+
+    set(allocation.theme_id)
+      == set(routed theme_record.theme_id)
+
+    set(market_batch.theme_id)
+      == set(registered theme_record.theme_id)
+
+Every top-level market batch, scan result, and allocation must therefore belong to exactly one current ReplayThemeRecord.
+
+All top-level MarketObservationBatch.cycle_as_of values must equal ReplayCycleResult.cycle_as_of.
+
+All top-level ThemeScanResult.as_of values and ResearchAllocation.as_of values must equal ReplayCycleResult.cycle_as_of.
+
+All ThemeScanResult.config_hash values within one replay cycle must be identical. Multiple scanner config hashes in one cycle raise:
+
+    ValueError("multiple scanner config hashes in replay cycle")
+
 For every ReplayThemeRecord:
 
 ### NO_OBSERVATION
@@ -316,7 +337,15 @@ Require:
 
 and both exactly equal the top-level objects for that theme.
 
-If market_batch is not None, it must exactly equal the top-level market batch for that theme.
+If registered is True:
+
+    market_batch is not None
+
+and it must exactly equal the top-level market batch for that theme.
+
+If registered is False:
+
+    market_batch is None
 
 If any consistency rule fails:
 
@@ -874,6 +903,8 @@ Define frozen dataclass:
       contradiction_persisted_n: int
       contradiction_resolved_n: int
 
+      source_independent_evidence_n: int
+      evidence_class_comparable_n: int
       evidence_class_changed_n: int
 
       tier_unassessed_n: int
@@ -881,10 +912,14 @@ Define frozen dataclass:
       tier_escalated_n: int
       tier_deescalated_n: int
 
+      forced_review_unassessed_n: int
+      forced_review_inactive_n: int
       forced_review_emerged_n: int
       forced_review_persisted_n: int
       forced_review_resolved_n: int
 
+      scanner_config_unassessed_n: int
+      scanner_config_same_n: int
       scanner_config_changed_n: int
 
       priority_delta_n: int
@@ -924,13 +959,28 @@ Never silently treat missing as zero.
 
 Increment:
 
+    source_independent_evidence_n
+
+when source_evidence_state.independent_source_count > 0.
+
+Increment:
+
+    evidence_class_comparable_n
+
+only when evidence_class_changed is not None.
+
+Increment:
+
     evidence_class_changed_n
 
-only when:
+only when evidence_class_changed is True.
 
-    transition.evidence_class_changed is True
+Therefore:
 
-Rows with None are not treated as unchanged.
+    evidence_class_changed_n
+      <= evidence_class_comparable_n
+
+Rows with None are never treated as unchanged.
 
 ## 50. Contradiction summary
 
@@ -959,13 +1009,31 @@ Therefore:
        + tier_escalated_n
        + tier_deescalated_n
 
-## 52. Scanner config change summary
+## 52. Forced-review and scanner-config denominator identities
 
-Increment scanner_config_changed_n only when:
+Forced-review state forms a complete partition:
 
-    scanner_config_changed is True
+    source_n
+      == forced_review_unassessed_n
+       + forced_review_inactive_n
+       + forced_review_emerged_n
+       + forced_review_persisted_n
+       + forced_review_resolved_n
 
-Rows with one/both scan configs missing are not classified as changed or unchanged.
+where inactive means:
+
+    False -> False
+
+and unassessed means either side is None.
+
+Scanner-config comparison also forms a complete partition:
+
+    source_n
+      == scanner_config_unassessed_n
+       + scanner_config_same_n
+       + scanner_config_changed_n
+
+where unassessed means either source/future scanner config hash is None.
 
 ## 53. Cohort metadata and limitations
 
@@ -974,6 +1042,7 @@ ReplayCohortResult includes a fixed limitations tuple:
     (
       "future system state is descriptive, not independent ground truth",
       "budget config identity is not recoverable from ReplayCycleResult alone",
+      "allocation tier records routing intent, not proof downstream research executed",
       "research allocation is not evaluated as a directional price prediction",
     )
 
@@ -1182,7 +1251,26 @@ Increment 7 reports their later evidence transitions descriptively.
 
 It does not claim causal effects of receiving research capacity.
 
-## 66. Scanner config changes
+## 66. Allocation is not execution
+
+Increment 7 observes:
+
+    what research tier was allocated
+
+It does not observe:
+
+    whether the downstream research was actually performed
+    how many analyst/compute hours were spent
+    what the downstream research discovered
+    whether that research changed a later decision
+
+Therefore cohort results measure where the allocator routed attention relative to later evidence evolution.
+
+They do not estimate return on research effort.
+
+A later FULL_DECISION_RESEARCH executor must create its own immutable execution/completion artifacts before value-of-research can be evaluated.
+
+## 67. Scanner config changes
 
 Evidence evolution remains interpretable across scanner-config changes because it is re-derived from archived current observations.
 
@@ -1364,6 +1452,25 @@ For every (routing_intent, horizon) group test:
       == all tier-transition buckets
 
 and mean-delta counts exactly match non-None transition deltas.
+
+Also require:
+
+    source_n
+      == forced_review_unassessed_n
+       + forced_review_inactive_n
+       + forced_review_emerged_n
+       + forced_review_persisted_n
+       + forced_review_resolved_n
+
+    source_n
+      == scanner_config_unassessed_n
+       + scanner_config_same_n
+       + scanner_config_changed_n
+
+and:
+
+    evidence_class_changed_n
+      <= evidence_class_comparable_n.
 
 ## 79. Hash determinism acceptance
 
