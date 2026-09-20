@@ -921,3 +921,76 @@ def test_replay_archive_interfaces_are_publicly_importable():
         "write_replay_archive",
     ):
         assert getattr(decision_lab, name) is not None
+
+
+
+@pytest.mark.parametrize("unsafe_value", [1, "yes"])
+def test_public_safe_requires_literal_true(tmp_path, unsafe_value):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "recomputed" / "replay_cycles"
+
+    with pytest.raises(
+        PermissionError,
+        match="public archive write requires explicit public_safe=True",
+    ):
+        write_replay_archive(
+            record,
+            root,
+            destination_visibility=ArchiveDestinationVisibility.PUBLIC,
+            public_safe=unsafe_value,
+        )
+
+    assert not root.exists()
+
+
+def test_cycle_directory_symlink_cannot_escape_archive_root(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "recomputed" / "replay_cycles"
+    outside = tmp_path / "outside"
+    root.mkdir(parents=True)
+    outside.mkdir()
+    cycle_link = root / "2026-09-19"
+    try:
+        cycle_link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    with pytest.raises(
+        ValueError,
+        match="archive cycle directory escapes archive root",
+    ):
+        write_replay_archive(
+            record,
+            root,
+            destination_visibility=ArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
+
+    assert not (outside / f"{record.replay_result_hash}.json").exists()
+
+
+def test_existing_archive_file_symlink_is_conflict(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    source_root = tmp_path / "source"
+    source = write_replay_archive(
+        record,
+        source_root,
+        destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+    )
+
+    target_root = tmp_path / "target"
+    target_path = replay_archive_path(record, target_root.resolve(strict=False))
+    target_path.parent.mkdir(parents=True)
+    try:
+        target_path.symlink_to(source.path)
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    with pytest.raises(FileExistsError, match="archive path conflict"):
+        write_replay_archive(
+            record,
+            target_root,
+            destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+        )
+
+    assert target_path.is_symlink()
