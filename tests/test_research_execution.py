@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import pytest
 
+from decision_lab.ledger import canonical_hash
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.market_observation import (
     MarketBar,
