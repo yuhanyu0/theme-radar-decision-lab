@@ -62,6 +62,13 @@ from .replay_cohort import (
     TierTransition,
     evaluate_replay_cohort,
 )
+from .research_budget import (
+    ResearchAllocation,
+    ResearchBudgetAllocator,
+    ResearchBudgetConfig,
+    ResearchTier,
+    load_research_budget_config,
+)
 from .research_execution import (
     CompanyLinkageStatus,
     CompanyLinkageSubmission,
@@ -88,13 +95,6 @@ from .research_execution import (
     ResearchWorkOrderPolicy,
     build_research_dossier,
     build_research_work_order,
-)
-from .research_budget import (
-    ResearchAllocation,
-    ResearchBudgetAllocator,
-    ResearchBudgetConfig,
-    ResearchTier,
-    load_research_budget_config,
 )
 from .scanner import (
     ScannerConfig,
