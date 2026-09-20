@@ -695,6 +695,178 @@ def _normalize_records(
     return tuple(record for _, record in rows)
 
 
+def _mean_or_none(values: Sequence[float]) -> float | None:
+    return None if not values else mean(values)
+
+
+def _build_summary(
+    routing_intent: RoutingIntent,
+    horizon: int,
+    rows: Sequence[ReplayCohortTransition],
+) -> ReplayCohortSummary:
+    contradiction_counts = {
+        value: sum(
+            item.contradiction_transition is value
+            for item in rows
+        )
+        for value in ContradictionTransition
+    }
+    tier_counts = {
+        value: sum(
+            item.tier_transition is value
+            for item in rows
+        )
+        for value in TierTransition
+    }
+
+    forced_unassessed = 0
+    forced_inactive = 0
+    forced_emerged = 0
+    forced_persisted = 0
+    forced_resolved = 0
+    scanner_unassessed = 0
+    scanner_same = 0
+    scanner_changed = 0
+
+    for item in rows:
+        if (
+            item.source_forced_review is None
+            or item.future_forced_review is None
+        ):
+            forced_unassessed += 1
+        elif not item.source_forced_review and not item.future_forced_review:
+            forced_inactive += 1
+        elif not item.source_forced_review and item.future_forced_review:
+            forced_emerged += 1
+        elif item.source_forced_review and item.future_forced_review:
+            forced_persisted += 1
+        else:
+            forced_resolved += 1
+
+        if item.scanner_config_changed is None:
+            scanner_unassessed += 1
+        elif item.scanner_config_changed:
+            scanner_changed += 1
+        else:
+            scanner_same += 1
+
+    priority = [
+        item.priority_delta
+        for item in rows
+        if item.priority_delta is not None
+    ]
+    confidence = [
+        item.confidence_delta
+        for item in rows
+        if item.confidence_delta is not None
+    ]
+    novelty = [
+        item.novelty_delta
+        for item in rows
+        if item.novelty_delta is not None
+    ]
+
+    return ReplayCohortSummary(
+        routing_intent=routing_intent,
+        horizon_cycles=horizon,
+        source_n=len(rows),
+        future_cycle_available_n=sum(
+            item.future_presence is not FuturePresence.RIGHT_CENSORED
+            for item in rows
+        ),
+        right_censored_n=sum(
+            item.future_presence is FuturePresence.RIGHT_CENSORED
+            for item in rows
+        ),
+        future_present_n=sum(
+            item.future_presence is FuturePresence.PRESENT
+            for item in rows
+        ),
+        future_not_present_n=sum(
+            item.future_presence is FuturePresence.NOT_PRESENT
+            for item in rows
+        ),
+        future_independent_evidence_n=sum(
+            item.future_evidence_state is not None
+            and item.future_evidence_state.independent_source_count > 0
+            for item in rows
+        ),
+        contradiction_unassessed_n=contradiction_counts[
+            ContradictionTransition.UNASSESSED
+        ],
+        contradiction_absent_n=contradiction_counts[
+            ContradictionTransition.ABSENT
+        ],
+        contradiction_emerged_n=contradiction_counts[
+            ContradictionTransition.EMERGED
+        ],
+        contradiction_persisted_n=contradiction_counts[
+            ContradictionTransition.PERSISTED
+        ],
+        contradiction_resolved_n=contradiction_counts[
+            ContradictionTransition.RESOLVED
+        ],
+        source_independent_evidence_n=sum(
+            item.source_evidence_state.independent_source_count > 0
+            for item in rows
+        ),
+        evidence_class_comparable_n=sum(
+            item.evidence_class_changed is not None
+            for item in rows
+        ),
+        evidence_class_changed_n=sum(
+            item.evidence_class_changed is True
+            for item in rows
+        ),
+        tier_unassessed_n=tier_counts[TierTransition.UNASSESSED],
+        tier_same_n=tier_counts[TierTransition.SAME],
+        tier_escalated_n=tier_counts[TierTransition.ESCALATED],
+        tier_deescalated_n=tier_counts[TierTransition.DEESCALATED],
+        forced_review_unassessed_n=forced_unassessed,
+        forced_review_inactive_n=forced_inactive,
+        forced_review_emerged_n=forced_emerged,
+        forced_review_persisted_n=forced_persisted,
+        forced_review_resolved_n=forced_resolved,
+        scanner_config_unassessed_n=scanner_unassessed,
+        scanner_config_same_n=scanner_same,
+        scanner_config_changed_n=scanner_changed,
+        priority_delta_n=len(priority),
+        mean_priority_delta=_mean_or_none(priority),
+        confidence_delta_n=len(confidence),
+        mean_confidence_delta=_mean_or_none(confidence),
+        novelty_delta_n=len(novelty),
+        mean_novelty_delta=_mean_or_none(novelty),
+    )
+
+
+def _build_summaries(
+    transitions: tuple[ReplayCohortTransition, ...],
+) -> tuple[ReplayCohortSummary, ...]:
+    grouped: dict[
+        tuple[RoutingIntent, int],
+        list[ReplayCohortTransition],
+    ] = {}
+    for item in transitions:
+        grouped.setdefault(
+            (item.routing_intent, item.horizon_cycles),
+            [],
+        ).append(item)
+
+    summaries = [
+        _build_summary(intent, horizon, rows)
+        for (intent, horizon), rows in grouped.items()
+    ]
+    return tuple(
+        sorted(
+            summaries,
+            key=lambda item: (
+                item.horizon_cycles,
+                item.routing_intent.value,
+            ),
+        )
+    )
+
+
 def _cohort_input_hash(
     records: tuple[ReplayArchiveRecord, ...],
     horizons: tuple[int, ...],
@@ -750,7 +922,7 @@ def evaluate_replay_cohort(
         normalized_records,
         normalized_horizons,
     )
-    summaries: tuple[ReplayCohortSummary, ...] = ()
+    summaries = _build_summaries(transitions)
     result_hash = _cohort_result_hash(
         horizons=normalized_horizons,
         records=normalized_records,
