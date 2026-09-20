@@ -218,6 +218,8 @@ def _validate_replay_input(
         if theme_id in seen:
             raise ValueError("duplicate replay theme")
         seen.add(theme_id)
+        if theme_input.package.universe.theme != theme_id:
+            raise ValueError("theme package definition and universe disagree")
         if not theme_input.market_source_ref.strip():
             raise ValueError("market_source_ref must be non-empty")
         if not _definition_is_effective(
@@ -225,6 +227,13 @@ def _validate_replay_input(
             cycle_date,
         ):
             raise ValueError("theme package not effective at cycle_as_of")
+
+    for observation in replay_input.external_observations:
+        if not observation.theme_id.strip():
+            raise ValueError("external observation theme_id must be non-empty")
+        if not observation.source_ref.strip():
+            raise ValueError("external observation source_ref must be non-empty")
+
     return cycle_date, sorted_themes
 
 
