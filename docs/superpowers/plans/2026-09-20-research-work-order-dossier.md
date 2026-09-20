@@ -1275,6 +1275,41 @@ def test_cross_company_evidence_is_rejected():
         )
 
 
+def test_ticker_specific_evidence_cannot_bind_to_another_valid_target():
+    record, package = _registered_archive()
+    order = build_research_work_order(
+        record,
+        "WorkTheme",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=package,
+        target_tickers=("AAA", "BBB"),
+    )
+    evidence = _evidence(
+        evidence_id="bbb",
+        source_ref="sec:bbb",
+        ticker="BBB",
+        payload={"growth": 0.2},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="ticker-specific evidence does not match binding target",
+    ):
+        _freeze_evidence_inputs(
+            (
+                ResearchEvidenceInput(
+                    evidence=evidence,
+                    independent=True,
+                    direction=ResearchEvidenceDirection.SUPPORTING,
+                    dimensions=("growth",),
+                    target_ticker="AAA",
+                ),
+            ),
+            order=order,
+            evidence_as_of=_parse_utc("2026-09-20"),
+        )
+
+
 def test_evidence_payload_is_frozen_by_snapshot():
     record, package = _registered_archive()
     order = build_research_work_order(
@@ -1532,6 +1567,14 @@ def _freeze_evidence(
             raise ValueError("theme reassessment requires theme-level evidence")
     elif target_ticker not in targets:
         raise ValueError("research evidence target is outside work-order scope")
+    if (
+        target_ticker is not None
+        and ticker is not None
+        and ticker != target_ticker
+    ):
+        raise ValueError(
+            "ticker-specific evidence does not match binding target"
+        )
 
     dimensions = _normalize_dimensions(
         item.dimensions,
@@ -2228,6 +2271,17 @@ def _normalize_company_submissions(
             raise ValueError("duplicate company evidence hash")
         if any(digest not in evidence for digest in hashes):
             raise ValueError("company submission references unknown evidence")
+        for digest in hashes:
+            record = evidence[digest]
+            record_ticker = (
+                None
+                if record.ticker is None
+                else record.ticker.upper()
+            )
+            if record_ticker not in (None, ticker):
+                raise ValueError(
+                    "company submission cites another target company"
+                )
 
         raw_facts = _canonical_raw_facts(submission.raw_facts)
         for key, value in raw_facts.items():
