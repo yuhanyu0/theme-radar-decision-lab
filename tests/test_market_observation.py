@@ -10,6 +10,7 @@ from decision_lab.market_observation import (
     MarketObservationStatus,
     adapt_market_observations,
 )
+from decision_lab.scanner import SupportDirection
 from decision_lab.themes import ThemeDefinition, ThemeKeyPolicy, ThemePackage
 from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
