@@ -1,5 +1,6 @@
 from dataclasses import asdict, replace
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from decision_lab.replay_archive import (
     read_replay_archive,
     replay_archive_path,
     verify_replay_archive,
+    write_replay_archive,
 )
 from decision_lab.research_budget import ResearchBudgetConfig, ResearchTier
 from decision_lab.scanner import ScannerConfig, SupportDirection, ThemeScanObservation
@@ -349,3 +351,170 @@ def test_verify_returns_false_for_missing_and_malformed_json(tmp_path):
     malformed.parent.mkdir(parents=True)
     malformed.write_text("{not-json", encoding="utf-8")
     assert not verify_replay_archive(malformed)
+
+
+
+def test_public_write_requires_explicit_public_safe_before_directory_creation(
+    tmp_path,
+):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "recomputed" / "replay_cycles"
+
+    with pytest.raises(
+        PermissionError,
+        match="public archive write requires explicit public_safe=True",
+    ):
+        write_replay_archive(
+            record,
+            root,
+            destination_visibility=ArchiveDestinationVisibility.PUBLIC,
+            public_safe=False,
+        )
+
+    assert not root.exists()
+
+
+def test_public_write_requires_canonical_root_suffix(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "reports" / "replay_cycles"
+
+    with pytest.raises(
+        ValueError,
+        match="public replay archives must use recomputed/replay_cycles",
+    ):
+        write_replay_archive(
+            record,
+            root,
+            destination_visibility=ArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
+
+    assert not root.exists()
+
+
+@pytest.mark.parametrize(
+    "visibility",
+    [
+        ArchiveDestinationVisibility.PUBLIC,
+        ArchiveDestinationVisibility.PRIVATE,
+    ],
+)
+def test_ledger_live_destination_is_always_rejected(tmp_path, visibility):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "ledger" / "live" / "replay_cycles"
+
+    with pytest.raises(
+        ValueError,
+        match="replay archives may not be written under ledger/live",
+    ):
+        write_replay_archive(
+            record,
+            root,
+            destination_visibility=visibility,
+            public_safe=True,
+        )
+
+    assert not root.exists()
+
+
+def test_private_destination_allows_public_safe_false(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "private-replays"
+
+    result = write_replay_archive(
+        record,
+        root,
+        destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+        public_safe=False,
+    )
+
+    assert result.created
+    assert result.path.exists()
+
+
+def test_same_record_write_is_idempotent(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "recomputed" / "replay_cycles"
+
+    first = write_replay_archive(
+        record,
+        root,
+        destination_visibility=ArchiveDestinationVisibility.PUBLIC,
+        public_safe=True,
+    )
+    second = write_replay_archive(
+        record,
+        root,
+        destination_visibility=ArchiveDestinationVisibility.PUBLIC,
+        public_safe=True,
+    )
+
+    assert first.created
+    assert not second.created
+    assert first.path == second.path
+    assert first.archive_record_hash == second.archive_record_hash
+    assert first.replay_result_hash == second.replay_result_hash
+    assert list(first.path.parent.glob("*.json")) == [first.path]
+
+
+def test_existing_conflicting_file_is_never_overwritten(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "private"
+    path = replay_archive_path(record, root)
+    path.parent.mkdir(parents=True)
+    original = b"{\"different\":true}\n"
+    path.write_bytes(original)
+
+    with pytest.raises(FileExistsError, match="archive path conflict"):
+        write_replay_archive(
+            record,
+            root,
+            destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+        )
+
+    assert path.read_bytes() == original
+
+
+def test_symlink_resolving_under_ledger_live_is_rejected(tmp_path):
+    target = tmp_path / "ledger" / "live" / "real"
+    target.mkdir(parents=True)
+    link = tmp_path / "archive-link"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    record = build_replay_archive_record(_sample_replay_result())
+    with pytest.raises(
+        ValueError,
+        match="replay archives may not be written under ledger/live",
+    ):
+        write_replay_archive(
+            record,
+            link,
+            destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+        )
+
+
+def test_public_symlink_to_noncanonical_destination_is_rejected(tmp_path):
+    target = tmp_path / "reports" / "replay_cycles"
+    target.mkdir(parents=True)
+    link_parent = tmp_path / "recomputed"
+    link_parent.mkdir()
+    link = link_parent / "replay_cycles"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    record = build_replay_archive_record(_sample_replay_result())
+    with pytest.raises(
+        ValueError,
+        match="public replay archives must use recomputed/replay_cycles",
+    ):
+        write_replay_archive(
+            record,
+            link,
+            destination_visibility=ArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
