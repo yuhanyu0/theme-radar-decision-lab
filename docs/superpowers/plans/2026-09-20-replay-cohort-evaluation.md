@@ -29,7 +29,7 @@
 
 ## Review Focus
 
-1. **Hash-valid but semantically inconsistent archives:** top-level batch/scan/allocation/theme-record coverage, per-theme equality, allocation source-scan hash, cycle timestamps, and single scanner-config hash must be checked before longitudinal analysis.
+1. **Hash-valid but semantically inconsistent archives:** top-level batch/scan/allocation/theme-record coverage, current-observation closure, market-batch observation inclusion, registration-bound routing intent, allocation source-scan hash, cycle timestamps, and single scanner-config hash must be checked before longitudinal analysis.
 2. **Missingness leakage:** future `NOT_PRESENT`, future `PRESENT + NO_OBSERVATION`, and `RIGHT_CENSORED` must keep all unavailable system fields/deltas as `None` rather than zero/SCAN_ONLY/dormant.
 3. **Independent-evidence comparability:** model-only source/future states and loss of independent coverage must make contradiction/evidence-class transitions `UNASSESSED`/None rather than resolution or unchanged.
 4. **Parallel/duplicate cycles:** duplicate archive records must fail before cycle analysis; distinct archives normalizing to the same UTC cycle instant must fail as ambiguous rather than being tie-broken.
@@ -2754,7 +2754,10 @@ Inspect specifically:
 - top-level batch/scan/allocation coverage equals theme-record expectations;
 - registered theme always owns a market batch; unknown theme never does;
 - observation themes all exist in current theme records;
+- ROUTED themes have current observations and NO_OBSERVATION themes have none;
+- every market-batch observation reaches combined_observations;
 - allocation source-scan hashes are verified;
+- routing tier/reasons are bound to registered versus unregistered state;
 - forced-review flags/reasons/tier combinations are supported exactly;
 - independent source metadata is consistent before source collapse;
 - contradiction resolution requires independent evidence on both source/future sides;
