@@ -4,10 +4,20 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import UTC, datetime
 from enum import Enum
+from math import isfinite
 
-from .adapters import BiotechClinicalEvidence, NormalizedCompanyEvidence
+from .adapters import (
+    BiotechClinicalAdapter,
+    BiotechClinicalEvidence,
+    CompanyEvidenceInput,
+    IndustrialsInfrastructureAdapter,
+    NormalizedCompanyEvidence,
+    RawFactValue,
+)
 from .evidence import EvidenceRecord
+from .hierarchical import HierarchicalLinkageResult
 from .ledger import canonical_hash
+from .linkage import LinkageResult
 from .replay_archive import ReplayArchiveRecord
 from .replay_cohort import RoutingIntent, evaluate_replay_cohort
 from .research_budget import ResearchTier
@@ -813,3 +823,452 @@ def _normalize_findings(
             )
         )
     return tuple(sorted(output, key=lambda item: item.finding_id))
+
+
+
+@dataclass(frozen=True)
+class CompanyResearchSubmission:
+    ticker: str
+    as_of: str
+    adapter_name: str
+    raw_facts: Mapping[str, RawFactValue]
+    evidence_source_hashes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class NormalizedCompanyField:
+    name: str
+    value: float | int | str
+
+
+@dataclass(frozen=True)
+class NormalizedCompanySnapshot:
+    ticker: str
+    as_of: str
+    adapter_name: str
+    source_coverage: str
+    provenance: tuple[str, ...]
+    fields: tuple[NormalizedCompanyField, ...]
+    normalized_payload_hash: str
+
+
+@dataclass(frozen=True)
+class CompanyLinkageSubmission:
+    ticker: str
+    linkage: LinkageResult | None = None
+    hierarchical_linkage: HierarchicalLinkageResult | None = None
+
+
+@dataclass(frozen=True)
+class HierarchicalLinkageSnapshot:
+    target: str
+    status: str
+    window: int
+    observations: int
+    theme_correlation: float | None
+    theme_beta: float | None
+    r2: float | None
+    incremental_theme_r2: float | None
+    residual_mean: float | None
+    residual_vol: float | None
+    circularity_warning: bool
+    missing_controls: tuple[str, ...]
+    coefficients: tuple[tuple[str, float], ...]
+    source_payload_hash: str
+
+
+class CompanyLinkageStatus(str, Enum):
+    USABLE = "USABLE"
+    COVERAGE_PENDING = "COVERAGE_PENDING"
+    CIRCULARITY_WARNING = "CIRCULARITY_WARNING"
+    NOT_PROVIDED = "NOT_PROVIDED"
+
+
+@dataclass(frozen=True)
+class CompanyResearchAssessment:
+    ticker: str
+    normalized_evidence: NormalizedCompanySnapshot | None
+    evidence_source_hashes: tuple[str, ...]
+    independent_source_count: int
+    covered_dimensions: tuple[str, ...]
+    linkage_status: CompanyLinkageStatus
+    linkage: LinkageResult | None
+    hierarchical_linkage: HierarchicalLinkageSnapshot | None
+    cautions: tuple[str, ...]
+
+
+def _canonical_raw_facts(
+    raw_facts: Mapping[str, RawFactValue],
+) -> dict[str, RawFactValue]:
+    output: dict[str, RawFactValue] = {}
+    for key, value in raw_facts.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("company raw-fact key must be non-empty")
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float, str))
+        ):
+            raise TypeError("unsupported company raw-fact value")
+        if isinstance(value, float) and not isfinite(value):
+            raise ValueError("company raw-fact value must be finite")
+        output[key.strip()] = value
+    return output
+
+
+def _adapter_for(name: str):
+    if name == "industrials_infrastructure":
+        return IndustrialsInfrastructureAdapter()
+    if name == "biotech_clinical":
+        return BiotechClinicalAdapter()
+    if name == "generic":
+        raise ValueError(
+            "generic adapter is not eligible for company deep dive"
+        )
+    raise ValueError("unsupported company evidence adapter")
+
+
+def _snapshot_normalized(
+    normalized,
+    *,
+    adapter_name: str,
+) -> NormalizedCompanySnapshot:
+    payload = asdict(normalized)
+    digest = canonical_hash(payload)
+    excluded = {
+        "ticker",
+        "as_of",
+        "source_coverage",
+        "provenance",
+        "raw_facts",
+    }
+    output_fields: list[NormalizedCompanyField] = []
+    for field in fields(normalized):
+        if field.name in excluded:
+            continue
+        value = getattr(normalized, field.name)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(
+            value,
+            (int, float, str),
+        ):
+            raise TypeError("unsupported normalized company field type")
+        if isinstance(value, float) and not isfinite(value):
+            raise ValueError("normalized company field must be finite")
+        output_fields.append(
+            NormalizedCompanyField(field.name, value)
+        )
+    return NormalizedCompanySnapshot(
+        ticker=normalized.ticker,
+        as_of=normalized.as_of,
+        adapter_name=adapter_name,
+        source_coverage=normalized.source_coverage,
+        provenance=tuple(normalized.provenance),
+        fields=tuple(
+            sorted(output_fields, key=lambda item: item.name)
+        ),
+        normalized_payload_hash=digest,
+    )
+
+
+def _canonical_value_equal(left, right) -> bool:
+    return canonical_hash({"value": left}) == canonical_hash(
+        {"value": right}
+    )
+
+
+def _normalize_company_submissions(
+    submissions: Sequence[CompanyResearchSubmission],
+    *,
+    order: ResearchWorkOrder,
+    evidence: Mapping[str, EvidenceRecord],
+    evidence_as_of: datetime,
+) -> dict[str, NormalizedCompanySnapshot]:
+    targets = {target.ticker for target in order.targets}
+    output: dict[str, NormalizedCompanySnapshot] = {}
+    for submission in submissions:
+        ticker = submission.ticker.strip().upper()
+        if ticker not in targets:
+            raise ValueError("company submission target outside work order")
+        if ticker in output:
+            raise ValueError("duplicate company research submission")
+        if submission.adapter_name != order.evidence_adapter:
+            raise ValueError("company adapter does not match work order")
+        company_as_of = _parse_utc(submission.as_of)
+        source_as_of = _parse_utc(order.source_cycle_as_of)
+        if company_as_of < source_as_of or company_as_of > evidence_as_of:
+            raise ValueError(
+                "company research as_of is outside execution window"
+            )
+
+        hashes = tuple(sorted(submission.evidence_source_hashes))
+        if len(set(hashes)) != len(hashes):
+            raise ValueError("duplicate company evidence hash")
+        if any(digest not in evidence for digest in hashes):
+            raise ValueError(
+                "company submission references unknown evidence"
+            )
+        for digest in hashes:
+            record = evidence[digest]
+            record_ticker = (
+                None
+                if record.ticker is None
+                else record.ticker.upper()
+            )
+            if record_ticker not in (None, ticker):
+                raise ValueError(
+                    "company submission cites another target company"
+                )
+
+        raw_facts = _canonical_raw_facts(submission.raw_facts)
+        for key, value in raw_facts.items():
+            supported = any(
+                record.ticker is not None
+                and record.ticker.upper() == ticker
+                and key in record.payload
+                and _canonical_value_equal(
+                    record.payload[key],
+                    value,
+                )
+                for digest, record in evidence.items()
+                if digest in hashes
+            )
+            if not supported:
+                raise ValueError(
+                    "company raw fact is unsupported by cited evidence"
+                )
+
+        normalized = _adapter_for(
+            submission.adapter_name
+        ).normalize(
+            CompanyEvidenceInput(
+                ticker=ticker,
+                as_of=submission.as_of,
+                raw_facts=dict(raw_facts),
+                provenance=hashes,
+            )
+        )
+        output[ticker] = _snapshot_normalized(
+            normalized,
+            adapter_name=submission.adapter_name,
+        )
+    return output
+
+
+def _finite_optional(value, *, field_name: str) -> None:
+    if value is not None and not isfinite(float(value)):
+        raise ValueError(f"{field_name} must be finite")
+
+
+def _snapshot_hierarchical_linkage(
+    value: HierarchicalLinkageResult,
+) -> HierarchicalLinkageSnapshot:
+    for name in (
+        "theme_correlation",
+        "theme_beta",
+        "r2",
+        "incremental_theme_r2",
+        "residual_mean",
+        "residual_vol",
+    ):
+        _finite_optional(getattr(value, name), field_name=name)
+    coefficients = tuple(
+        sorted(
+            (
+                str(name),
+                float(coefficient),
+            )
+            for name, coefficient in value.coefficients.items()
+        )
+    )
+    if any(
+        not isfinite(coefficient)
+        for _, coefficient in coefficients
+    ):
+        raise ValueError("linkage coefficient must be finite")
+    return HierarchicalLinkageSnapshot(
+        target=value.target.upper(),
+        status=value.status,
+        window=value.window,
+        observations=value.observations,
+        theme_correlation=value.theme_correlation,
+        theme_beta=value.theme_beta,
+        r2=value.r2,
+        incremental_theme_r2=value.incremental_theme_r2,
+        residual_mean=value.residual_mean,
+        residual_vol=value.residual_vol,
+        circularity_warning=value.circularity_warning,
+        missing_controls=tuple(value.missing_controls),
+        coefficients=coefficients,
+        source_payload_hash=canonical_hash(asdict(value)),
+    )
+
+
+def _validate_simple_linkage(
+    value: LinkageResult,
+    ticker: str,
+) -> LinkageResult:
+    if value.ticker.upper() != ticker:
+        raise ValueError("linkage ticker mismatch")
+    for name in (
+        "correlation",
+        "beta",
+        "r2",
+        "residual_mean",
+        "residual_vol",
+        "beta_stability",
+        "decoupling_score",
+    ):
+        _finite_optional(getattr(value, name), field_name=name)
+    return value
+
+
+def _linkage_status(
+    linkage: LinkageResult | None,
+    hierarchical: HierarchicalLinkageSnapshot | None,
+) -> CompanyLinkageStatus:
+    if linkage is None and hierarchical is None:
+        return CompanyLinkageStatus.NOT_PROVIDED
+    if (
+        (linkage is not None and linkage.circularity_warning)
+        or (
+            hierarchical is not None
+            and hierarchical.circularity_warning
+        )
+    ):
+        return CompanyLinkageStatus.CIRCULARITY_WARNING
+    if (
+        hierarchical is not None
+        and hierarchical.status == "ok"
+    ):
+        return CompanyLinkageStatus.USABLE
+    if (
+        linkage is not None
+        and linkage.correlation is not None
+        and linkage.beta is not None
+        and linkage.r2 is not None
+    ):
+        return CompanyLinkageStatus.USABLE
+    return CompanyLinkageStatus.COVERAGE_PENDING
+
+
+def _normalize_linkage_submissions(
+    submissions: Sequence[CompanyLinkageSubmission],
+    *,
+    order: ResearchWorkOrder,
+) -> dict[
+    str,
+    tuple[
+        LinkageResult | None,
+        HierarchicalLinkageSnapshot | None,
+    ],
+]:
+    targets = {target.ticker for target in order.targets}
+    output: dict[
+        str,
+        tuple[
+            LinkageResult | None,
+            HierarchicalLinkageSnapshot | None,
+        ],
+    ] = {}
+    for submission in submissions:
+        ticker = submission.ticker.strip().upper()
+        if ticker not in targets:
+            raise ValueError("linkage target outside work order")
+        if ticker in output:
+            raise ValueError("duplicate company linkage submission")
+        if (
+            submission.linkage is None
+            and submission.hierarchical_linkage is None
+        ):
+            raise ValueError("linkage submission is empty")
+
+        simple = (
+            None
+            if submission.linkage is None
+            else _validate_simple_linkage(
+                submission.linkage,
+                ticker,
+            )
+        )
+        hierarchical = None
+        if submission.hierarchical_linkage is not None:
+            if (
+                submission.hierarchical_linkage.target.upper()
+                != ticker
+            ):
+                raise ValueError("linkage ticker mismatch")
+            hierarchical = _snapshot_hierarchical_linkage(
+                submission.hierarchical_linkage
+            )
+        output[ticker] = (simple, hierarchical)
+    return output
+
+
+def _build_company_assessments(
+    *,
+    order: ResearchWorkOrder,
+    bindings: tuple[ResearchEvidenceBinding, ...],
+    company_snapshots: Mapping[str, NormalizedCompanySnapshot],
+    linkage_map: Mapping[
+        str,
+        tuple[
+            LinkageResult | None,
+            HierarchicalLinkageSnapshot | None,
+        ],
+    ],
+) -> tuple[CompanyResearchAssessment, ...]:
+    rows: list[CompanyResearchAssessment] = []
+    for target in order.targets:
+        ticker = target.ticker
+        linkage, hierarchical = linkage_map.get(
+            ticker,
+            (None, None),
+        )
+        status = _linkage_status(linkage, hierarchical)
+        independent_refs = {
+            item.evidence.source_ref
+            for item in bindings
+            if item.target_ticker == ticker and item.independent
+        }
+        normalized = company_snapshots.get(ticker)
+        covered_dimensions = (
+            ()
+            if normalized is None
+            else tuple(
+                field.name
+                for field in normalized.fields
+            )
+        )
+        evidence_hashes = tuple(
+            sorted(
+                item.evidence.source_hash
+                for item in bindings
+                if item.target_ticker == ticker
+            )
+        )
+        cautions: list[str] = []
+        if status is CompanyLinkageStatus.COVERAGE_PENDING:
+            cautions.append("linkage coverage pending")
+        elif status is CompanyLinkageStatus.CIRCULARITY_WARNING:
+            cautions.append("linkage circularity warning")
+        if (
+            len(independent_refs)
+            < order.minimum_independent_sources_per_company
+        ):
+            cautions.append("independent source minimum not met")
+
+        rows.append(
+            CompanyResearchAssessment(
+                ticker=ticker,
+                normalized_evidence=normalized,
+                evidence_source_hashes=evidence_hashes,
+                independent_source_count=len(independent_refs),
+                covered_dimensions=covered_dimensions,
+                linkage_status=status,
+                linkage=linkage,
+                hierarchical_linkage=hierarchical,
+                cautions=tuple(cautions),
+            )
+        )
+    return tuple(rows)
