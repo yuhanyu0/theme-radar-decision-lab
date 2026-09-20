@@ -1276,7 +1276,7 @@ Evidence evolution remains interpretable across scanner-config changes because i
 
 System transition comparisons across changed scanner configs remain descriptive and expose scanner_config_changed.
 
-## 67. Budget config changes
+## 68. Budget config changes
 
 Because budget config identity is unavailable, tier-transition summaries may mix allocations generated under different unknown budget configurations.
 
@@ -1284,7 +1284,7 @@ The limitation is explicit.
 
 Do not infer budget-threshold calibration from tier-transition counts alone.
 
-## 68. First acceptance cohort
+## 69. First acceptance cohort
 
 Create at least three valid replay archive records using run_replay_cycle.
 
@@ -1326,7 +1326,7 @@ Expected horizon-2 outcomes from C0 include:
 - Genomics contradiction EMERGED;
 - Rates PRESENT but future evidence class NO_INDEPENDENT.
 
-## 69. Right-censor acceptance
+## 70. Right-censor acceptance
 
 For C1 and C2 source rows at horizons with no sufficiently later archive:
 
@@ -1336,7 +1336,7 @@ must be emitted, not dropped.
 
 Summary denominators must include them.
 
-## 70. NOT_PRESENT acceptance
+## 71. NOT_PRESENT acceptance
 
 If Rates is absent in C1:
 
@@ -1346,7 +1346,7 @@ If Rates is absent in C1:
 - contradiction transition is UNASSESSED;
 - tier transition is UNASSESSED.
 
-## 71. NO_OBSERVATION acceptance
+## 72. NO_OBSERVATION acceptance
 
 If Quiet is still registered in C1 but produces no current observation:
 
@@ -1357,7 +1357,7 @@ If Quiet is still registered in C1 but produces no current observation:
 
 This proves NOT_PRESENT != NO_OBSERVATION != SCAN_ONLY.
 
-## 72. Capacity-missed acceptance
+## 73. Capacity-missed acceptance
 
 Construct one valid replay with:
 
@@ -1375,7 +1375,7 @@ Cohort routing_intent must be:
 
 No budget-config identity is inferred from the archive.
 
-## 73. Source-metadata conflict acceptance
+## 74. Source-metadata conflict acceptance
 
 Construct or tamper an in-memory validly-hashed replay result so the same:
 
@@ -1392,7 +1392,7 @@ Cohort evaluation must reject:
 
 Do not collapse conflicting sources.
 
-## 74. Internal replay-consistency acceptance
+## 75. Internal replay-consistency acceptance
 
 Evaluation rejects archive records whose replay result is hash-valid but semantically inconsistent, including:
 
@@ -1405,7 +1405,7 @@ Evaluation rejects archive records whose replay result is hash-valid but semanti
 
 Archive integrity alone does not make these longitudinal semantics valid.
 
-## 75. Input-order determinism acceptance
+## 76. Input-order determinism acceptance
 
 Reverse:
 
@@ -1414,7 +1414,7 @@ Reverse:
 
 Result must be exactly equal.
 
-## 76. Duplicate-cycle acceptance
+## 77. Duplicate-cycle acceptance
 
 Two distinct archive records with the same normalized cycle instant:
 
@@ -1424,7 +1424,7 @@ Two copies of the same archive record:
 
     ValueError("duplicate replay archive record")
 
-## 77. Horizon acceptance
+## 78. Horizon acceptance
 
 Reject:
 
@@ -1435,7 +1435,7 @@ Reject:
 - floats;
 - strings.
 
-## 78. Summary acceptance
+## 79. Summary acceptance
 
 For every (routing_intent, horizon) group test:
 
@@ -1472,7 +1472,7 @@ and:
     evidence_class_changed_n
       <= evidence_class_comparable_n.
 
-## 79. Hash determinism acceptance
+## 80. Hash determinism acceptance
 
 Same validated archive set + same horizon set:
 
@@ -1488,7 +1488,7 @@ Changing:
 
 must change input_hash.
 
-## 80. Purity
+## 81. Purity
 
 evaluate_replay_cohort must not:
 
@@ -1501,7 +1501,7 @@ evaluate_replay_cohort must not:
 - call network;
 - mutate input records.
 
-## 81. Proposed public types
+## 82. Proposed public types
 
 Export:
 
@@ -1518,7 +1518,7 @@ Export:
 
 Keep helper functions private.
 
-## 82. Proposed files
+## 83. Proposed files
 
 Create:
 
@@ -1548,7 +1548,7 @@ Do not modify behavior in:
 
 If cohort implementation appears to require changing those semantics, stop and upgrade scope.
 
-## 83. Public-repository safety
+## 84. Public-repository safety
 
 Increment 7 operates on replay archives already affirmed safe for their storage destination.
 
@@ -1558,7 +1558,7 @@ Tests use public-safe synthetic observations/configs.
 
 Do not add holdings, sizing, account data, confidential employer data, or licensed raw market payloads.
 
-## 84. Deferred work
+## 85. Deferred work
 
 Deliberately deferred:
 
@@ -1574,7 +1574,7 @@ Deliberately deferred:
 - automated scheduling;
 - FULL_DECISION_RESEARCH executor.
 
-## 85. Completion criterion
+## 86. Completion criterion
 
 Increment 7 is complete when an ordered or unordered set of immutable replay archive records can be transformed deterministically into:
 
@@ -1590,6 +1590,7 @@ with:
 - no price interpretation;
 - no single performance score;
 - no false budget-config attribution;
+- no claim that an allocated research tier proves downstream research execution;
 - NO_OBSERVATION, NOT_PRESENT, and RIGHT_CENSORED kept distinct;
 - independent contradiction emergence/persistence/resolution requiring actual independent evidence;
 - deterministic cohort hashes and summaries;
