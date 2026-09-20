@@ -11,7 +11,7 @@ from decision_lab.market_observation import (
     adapt_market_observations,
 )
 from decision_lab.themes import ThemeDefinition, ThemeKeyPolicy, ThemePackage
-from decision_lab.universe import ThemeLayer, ThemeUniverse
+from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
 
 def _package(theme="DataCenter_Infra", candidates=()):
@@ -213,3 +213,365 @@ def test_insufficient_benchmark_history_returns_coverage_pending():
     assert len(batch.diagnostics) == 1
     assert batch.diagnostics[0].status is MarketObservationStatus.COVERAGE_PENDING
     assert "insufficient benchmark history" in batch.diagnostics[0].reason
+
+
+
+def _candidate(ticker, *, effective_from=None, effective_to=None):
+    return Candidate(
+        ticker=ticker,
+        theme="DataCenter_Infra",
+        layer="layer",
+        effective_from=effective_from,
+        effective_to=effective_to,
+    )
+
+
+def _sessions():
+    return [
+        "2026-09-09",
+        "2026-09-10",
+        "2026-09-11",
+        "2026-09-14",
+        "2026-09-15",
+    ]
+
+
+def _series(symbol, closes, *, available_hour=21):
+    return [
+        _bar(
+            symbol,
+            session,
+            close,
+            available_at=f"{session}T{available_hour:02d}:00:00+00:00",
+        )
+        for session, close in zip(_sessions(), closes, strict=True)
+    ]
+
+
+def test_basket_current_return_breadth_persistence_and_excess_are_exact():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("B", effective_from="2026-01-01"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 90, 80])
+        + _series("B", [100, 100, 100, 100, 90])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+    diag = batch.diagnostics[0]
+
+    assert diag.status is MarketObservationStatus.READY
+    assert diag.current_member_symbols == ("A", "B")
+    assert diag.current_return == pytest.approx((-0.20 - 0.10) / 2)
+    assert diag.benchmark_current_return == 0.0
+    assert diag.current_excess_return == pytest.approx(-0.15)
+    assert diag.breadth == 0.0
+    assert diag.persistence == 0.0
+    assert diag.relative_strength_signal == pytest.approx(0.0)
+    assert diag.breadth_signal == 0.0
+    assert diag.persistence_signal == 0.0
+    assert diag.support_direction is SupportDirection.CONTRADICTING
+    assert len(batch.observations) == 1
+
+
+def test_strong_broad_basket_is_supporting():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("B", effective_from="2026-01-01"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 105, 110])
+        + _series("B", [100, 100, 100, 104, 108])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].current_excess_return > 0.02
+    assert batch.diagnostics[0].breadth == 1.0
+    assert batch.diagnostics[0].support_direction is SupportDirection.SUPPORTING
+
+
+def test_mixed_basket_is_neutral():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("B", effective_from="2026-01-01"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 101, 102])
+        + _series("B", [100, 100, 100, 99, 98])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].support_direction is SupportDirection.NEUTRAL
+
+
+def test_member_admitted_after_window_start_is_excluded_from_current_basket():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("NEW", effective_from="2026-09-15"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 100, 105])
+        + _series("NEW", [100, 100, 100, 100, 200])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=replace(_basket_spec(), min_basket_members=1),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].current_member_symbols == ("A",)
+    assert batch.diagnostics[0].current_return == pytest.approx(0.05)
+
+
+def test_membership_uses_session_date_not_available_at():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("NEW", effective_from="2026-09-15"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 100, 101])
+        + [
+            _bar(
+                "NEW",
+                session,
+                close,
+                available_at="2026-09-15T10:00:00+00:00",
+            )
+            for session, close in zip(
+                _sessions(),
+                [100, 100, 100, 100, 200],
+                strict=True,
+            )
+        ]
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=replace(_basket_spec(), min_basket_members=1),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].current_member_symbols == ("A",)
+
+
+def test_invalid_rows_for_not_yet_effective_member_are_ignored():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("FUTURE", effective_from="2026-10-01"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 100, 101])
+        + [
+            MarketBar(
+                symbol="FUTURE",
+                session_date="bad-date",
+                available_at="2099-01-01",
+                close=-1,
+            )
+        ]
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=replace(_basket_spec(), min_basket_members=1),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].current_member_symbols == ("A",)
+
+
+def test_effective_to_is_half_open_on_session_date():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate(
+                "OLD",
+                effective_from="2026-01-01",
+                effective_to="2026-09-15",
+            ),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 100, 101])
+        + _series("OLD", [100, 100, 100, 100, 200])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=replace(_basket_spec(), min_basket_members=1),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.diagnostics[0].current_member_symbols == ("A",)
+
+
+def test_stable_cohort_not_current_composition_drives_novelty():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("B", effective_from="2026-01-01"),
+            _candidate("NEW", effective_from="2026-09-14"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 110, 120])
+        + _series("B", [100, 100, 100, 90, 80])
+        + _series("NEW", [100, 100, 100, 100, 200])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+    diag = batch.diagnostics[0]
+
+    assert diag.current_member_symbols == ("A", "B")
+    assert diag.stable_member_symbols == ("A", "B")
+    assert not diag.membership_changed
+    assert diag.comparison_prior_excess_return == pytest.approx(0.0)
+    assert diag.comparison_current_excess_return == pytest.approx(0.0)
+    assert diag.novelty_abs_excess_change == pytest.approx(0.0)
+    assert diag.novelty_signal == 0.0
+
+
+def test_membership_changed_is_explicit_when_current_cohort_exceeds_stable_cohort():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("B", effective_from="2026-09-11"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 100, 100])
+        + _series("B", [100, 100, 100, 110, 120])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=replace(_basket_spec(), min_basket_members=1),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+    diag = batch.diagnostics[0]
+
+    assert diag.current_member_symbols == ("A", "B")
+    assert diag.stable_member_symbols == ("A",)
+    assert diag.membership_changed
+    assert diag.current_excess_return == pytest.approx(0.10)
+    assert diag.comparison_current_excess_return == pytest.approx(0.0)
+
+
+def test_insufficient_stable_cohort_leaves_only_novelty_missing():
+    package = _package(
+        candidates=[
+            _candidate("A", effective_from="2026-01-01"),
+            _candidate("B", effective_from="2026-09-11"),
+        ]
+    )
+    bars = (
+        _series("SPY", [100, 100, 100, 100, 100])
+        + _series("A", [100, 100, 100, 100, 100])
+        + _series("B", [100, 100, 100, 110, 120])
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+    diag = batch.diagnostics[0]
+
+    assert diag.status is MarketObservationStatus.READY
+    assert diag.current_member_count == 2
+    assert diag.stable_member_count == 1
+    assert diag.novelty_signal is None
+    assert "insufficient stable comparison cohort" in diag.warnings
+
+
+def test_too_few_current_members_returns_coverage_pending_and_no_observation():
+    package = _package(
+        candidates=[_candidate("A", effective_from="2026-01-01")]
+    )
+    bars = _series("SPY", [100, 100, 100, 100, 100]) + _series(
+        "A", [100, 100, 100, 100, 101]
+    )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=_basket_spec(),
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-15",
+        market_source_ref="fixture:basket",
+    )
+
+    assert batch.observations == ()
+    assert batch.diagnostics[0].status is MarketObservationStatus.COVERAGE_PENDING
+    assert "too few current basket members" in batch.diagnostics[0].reason
