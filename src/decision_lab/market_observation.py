@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
 from enum import Enum
 from math import isfinite
@@ -235,6 +235,69 @@ def _used_bar_payload(rows: Sequence[MarketBar]) -> list[dict[str, object]]:
     ]
 
 
+def _price_index(
+    rows: Sequence[MarketBar],
+) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    for row in rows:
+        out.setdefault(row.symbol.upper(), {})[row.session_date] = row.close
+    return out
+
+
+def _return(prices: dict[str, float], start: str, end: str) -> float:
+    return prices[end] / prices[start] - 1.0
+
+
+def _has_all_sessions(
+    prices: dict[str, float],
+    sessions: Sequence[str],
+) -> bool:
+    return all(session in prices for session in sessions)
+
+
+def _candidate_effective_for_window(candidate, start: str, end: str) -> bool:
+    return candidate.is_effective(start) and candidate.is_effective(end)
+
+
+def _clip01(value: float) -> float:
+    return min(1.0, max(0.0, float(value)))
+
+
+def _basket_direction(
+    *,
+    current_excess: float,
+    breadth: float,
+    config: MarketObservationConfig,
+) -> SupportDirection:
+    if (
+        current_excess >= config.basket_support_excess_min
+        and breadth >= config.basket_support_breadth_min
+    ):
+        return SupportDirection.SUPPORTING
+    if (
+        current_excess <= config.basket_contradiction_excess_max
+        and breadth <= config.basket_contradiction_breadth_max
+    ):
+        return SupportDirection.CONTRADICTING
+    return SupportDirection.NEUTRAL
+
+
+def _member_rows_for_sessions(
+    bars: Sequence[MarketBar],
+    symbol: str,
+    sessions: Sequence[str],
+    *,
+    cycle_end: datetime,
+) -> list[MarketBar]:
+    wanted = set(sessions)
+    rows = [
+        row
+        for row in bars
+        if row.symbol.upper() == symbol.upper() and row.session_date in wanted
+    ]
+    return _validate_used_rows(rows, cycle_end=cycle_end)
+
+
 def _coverage_diagnostic(
     *,
     package: ThemePackage,
@@ -345,31 +408,274 @@ def adapt_market_observations(
     prior_end = sessions[prior_end_index]
     prior_start = sessions[prior_start_index]
 
-    reason = (
-        "too few current basket members"
-        if spec.mode is MarketObservationMode.BASKET
-        else "proxy observations not implemented"
+    if spec.mode is MarketObservationMode.PROXY:
+        diagnostic = _coverage_diagnostic(
+            package=package,
+            spec=spec,
+            config=config,
+            benchmark_rows=benchmark_rows,
+            market_as_of=market_as_of,
+            current_start=current_start,
+            current_end=market_as_of,
+            prior_start=prior_start,
+            prior_end=prior_end,
+            reason="proxy observations not implemented",
+            market_source_ref=market_source_ref,
+        )
+        return MarketObservationBatch(
+            theme_id=spec.theme_id,
+            cycle_as_of=cycle_as_of,
+            market_as_of=market_as_of,
+            observations=(),
+            diagnostics=(diagnostic,),
+            input_hash=canonical_hash([diagnostic.input_hash]),
+            spec_hash=spec_hash,
+            config_hash=config_hash,
+        )
+
+    current_sessions = sessions[current_start_index : current_end_index + 1]
+    prior_sessions = sessions[prior_start_index : prior_end_index + 1]
+    all_window_sessions = sessions[prior_start_index : current_end_index + 1]
+    benchmark_prices = _price_index(benchmark_rows)[benchmark]
+    benchmark_current_return = _return(
+        benchmark_prices,
+        current_start,
+        market_as_of,
     )
-    diagnostic = _coverage_diagnostic(
-        package=package,
-        spec=spec,
+    benchmark_prior_return = _return(
+        benchmark_prices,
+        prior_start,
+        prior_end,
+    )
+
+    current_members: list[str] = []
+    stable_members: list[str] = []
+    prices_by_symbol: dict[str, dict[str, float]] = {}
+    used_member_rows: list[MarketBar] = []
+
+    for candidate in sorted(
+        package.universe.candidates.values(),
+        key=lambda item: item.ticker.upper(),
+    ):
+        symbol = candidate.ticker.upper()
+        if not _candidate_effective_for_window(
+            candidate,
+            current_start,
+            market_as_of,
+        ):
+            continue
+
+        stable_effective = _candidate_effective_for_window(
+            candidate,
+            prior_start,
+            market_as_of,
+        )
+        requested_sessions = (
+            all_window_sessions if stable_effective else current_sessions
+        )
+        member_rows = _member_rows_for_sessions(
+            bars,
+            symbol,
+            requested_sessions,
+            cycle_end=cycle_end,
+        )
+        member_prices = _price_index(member_rows).get(symbol, {})
+        if not _has_all_sessions(member_prices, current_sessions):
+            continue
+
+        current_members.append(symbol)
+        prices_by_symbol[symbol] = member_prices
+        if stable_effective and _has_all_sessions(
+            member_prices,
+            all_window_sessions,
+        ):
+            stable_members.append(symbol)
+            used_member_rows.extend(member_rows)
+        else:
+            used_member_rows.extend(
+                row
+                for row in member_rows
+                if row.session_date in set(current_sessions)
+            )
+
+    current_member_symbols = tuple(current_members)
+    stable_member_symbols = tuple(stable_members)
+    if len(current_members) < spec.min_basket_members:
+        diagnostic = _coverage_diagnostic(
+            package=package,
+            spec=spec,
+            config=config,
+            benchmark_rows=benchmark_rows,
+            market_as_of=market_as_of,
+            current_start=current_start,
+            current_end=market_as_of,
+            prior_start=prior_start,
+            prior_end=prior_end,
+            reason="too few current basket members",
+            market_source_ref=market_source_ref,
+        )
+        diagnostic = replace(
+            diagnostic,
+            instrument=spec.theme_id,
+            current_member_symbols=current_member_symbols,
+            stable_member_symbols=stable_member_symbols,
+            current_member_count=len(current_members),
+            stable_member_count=len(stable_members),
+            membership_changed=current_member_symbols != stable_member_symbols,
+        )
+        return MarketObservationBatch(
+            theme_id=spec.theme_id,
+            cycle_as_of=cycle_as_of,
+            market_as_of=market_as_of,
+            observations=(),
+            diagnostics=(diagnostic,),
+            input_hash=canonical_hash([diagnostic.input_hash]),
+            spec_hash=spec_hash,
+            config_hash=config_hash,
+        )
+
+    member_returns = [
+        _return(prices_by_symbol[symbol], current_start, market_as_of)
+        for symbol in current_members
+    ]
+    current_return = sum(member_returns) / len(member_returns)
+    breadth = sum(value > 0.0 for value in member_returns) / len(member_returns)
+
+    outperforming = 0
+    intervals = 0
+    for start, end in zip(
+        current_sessions,
+        current_sessions[1:],
+        strict=True,
+    ):
+        basket_daily = sum(
+            _return(prices_by_symbol[symbol], start, end)
+            for symbol in current_members
+        ) / len(current_members)
+        benchmark_daily = _return(benchmark_prices, start, end)
+        outperforming += basket_daily > benchmark_daily
+        intervals += 1
+    persistence = outperforming / intervals
+
+    current_excess = current_return - benchmark_current_return
+    comparison_current_excess: float | None = None
+    comparison_prior_excess: float | None = None
+    novelty_abs_excess_change: float | None = None
+    novelty_signal: float | None = None
+    warnings: list[str] = []
+
+    if len(stable_members) >= spec.min_basket_members:
+        stable_current_return = sum(
+            _return(prices_by_symbol[symbol], current_start, market_as_of)
+            for symbol in stable_members
+        ) / len(stable_members)
+        stable_prior_return = sum(
+            _return(prices_by_symbol[symbol], prior_start, prior_end)
+            for symbol in stable_members
+        ) / len(stable_members)
+        comparison_current_excess = (
+            stable_current_return - benchmark_current_return
+        )
+        comparison_prior_excess = stable_prior_return - benchmark_prior_return
+        novelty_abs_excess_change = abs(
+            comparison_current_excess - comparison_prior_excess
+        )
+        novelty_signal = _clip01(
+            novelty_abs_excess_change / config.novelty_scale
+        )
+    else:
+        warnings.append("insufficient stable comparison cohort")
+
+    direction = _basket_direction(
+        current_excess=current_excess,
+        breadth=breadth,
         config=config,
-        benchmark_rows=benchmark_rows,
+    )
+    relevant_benchmark_rows = [
+        row
+        for row in benchmark_rows
+        if row.session_date in set(all_window_sessions)
+    ]
+    used_rows = sorted(
+        relevant_benchmark_rows + used_member_rows,
+        key=lambda row: (row.symbol, row.session_date),
+    )
+    input_hash = canonical_hash(_used_bar_payload(used_rows))
+    relative_strength_signal = _clip01(
+        0.5 + current_excess / config.relative_strength_scale
+    )
+    diagnostic = MarketObservationDiagnostics(
+        theme_id=spec.theme_id,
+        mode=spec.mode,
+        instrument=spec.theme_id,
+        benchmark=benchmark,
         market_as_of=market_as_of,
         current_start=current_start,
         current_end=market_as_of,
         prior_start=prior_start,
         prior_end=prior_end,
-        reason=reason,
-        market_source_ref=market_source_ref,
+        status=MarketObservationStatus.READY,
+        reason="ready",
+        current_return=current_return,
+        benchmark_current_return=benchmark_current_return,
+        current_excess_return=current_excess,
+        comparison_current_excess_return=comparison_current_excess,
+        comparison_prior_excess_return=comparison_prior_excess,
+        novelty_abs_excess_change=novelty_abs_excess_change,
+        breadth=breadth,
+        persistence=persistence,
+        current_member_symbols=current_member_symbols,
+        stable_member_symbols=stable_member_symbols,
+        current_member_count=len(current_members),
+        stable_member_count=len(stable_members),
+        membership_changed=current_member_symbols != stable_member_symbols,
+        support_direction=direction,
+        relative_strength_signal=relative_strength_signal,
+        breadth_signal=breadth,
+        persistence_signal=persistence,
+        novelty_signal=novelty_signal,
+        universe_version=package.universe.version,
+        package_version=package.version,
+        spec_version=spec.version,
+        config_version=config.version,
+        input_hash=input_hash,
+        spec_hash=spec_hash,
+        config_hash=config_hash,
+        evidence_refs=(market_source_ref,),
+        warnings=tuple(warnings),
+    )
+    source_ref = (
+        f"market_observation:{spec.theme_id}:{spec.mode.value}:"
+        f"{spec.theme_id}:{market_as_of}:{input_hash[:12]}"
+    )
+    observation = ThemeScanObservation(
+        theme_id=spec.theme_id,
+        as_of=market_as_of,
+        source_type="derived_feature",
+        source_ref=source_ref,
+        discovery_signal=None,
+        structure_signal=None,
+        persistence_signal=persistence,
+        breadth_signal=breadth,
+        relative_strength_signal=relative_strength_signal,
+        volatility_signal=None,
+        novelty_signal=novelty_signal,
+        support_direction=direction,
+        evidence_refs=(
+            market_source_ref,
+            f"package:{spec.theme_id}@{package.version}",
+            f"universe:{spec.theme_id}@{package.universe.version}",
+        ),
+        is_independent=True,
+        observed_or_inferred="inferred",
     )
     return MarketObservationBatch(
         theme_id=spec.theme_id,
         cycle_as_of=cycle_as_of,
         market_as_of=market_as_of,
-        observations=(),
+        observations=(observation,),
         diagnostics=(diagnostic,),
-        input_hash=canonical_hash([diagnostic.input_hash]),
+        input_hash=canonical_hash([input_hash]),
         spec_hash=spec_hash,
         config_hash=config_hash,
     )
