@@ -32,6 +32,14 @@ from .market_observation import (
 )
 from .outcomes import evaluate_forward_outcomes, missed_upside, summarize_decisions
 from .playbooks import PlaybookRouting, route_playbooks
+from .replay import (
+    ReplayCycleInput,
+    ReplayCycleResult,
+    ReplayStatus,
+    ReplayThemeRecord,
+    ThemeReplayInput,
+    run_replay_cycle,
+)
 from .research_budget import (
     ResearchAllocation,
     ResearchBudgetAllocator,
@@ -81,6 +89,10 @@ __all__ = [
     "MarketObservationStatus",
     "NormalizedCompanyEvidence",
     "PlaybookRouting",
+    "ReplayCycleInput",
+    "ReplayCycleResult",
+    "ReplayStatus",
+    "ReplayThemeRecord",
     "ResearchAllocation",
     "ResearchBudgetAllocator",
     "ResearchBudgetConfig",
@@ -96,6 +108,7 @@ __all__ = [
     "ThemeLifecycleState",
     "ThemePackage",
     "ThemeRegistry",
+    "ThemeReplayInput",
     "ThemeScanObservation",
     "ThemeScanResult",
     "ThemeUniverse",
@@ -117,6 +130,7 @@ __all__ = [
     "rank_themes",
     "rolling_linkage",
     "route_playbooks",
+    "run_replay_cycle",
     "summarize_decisions",
     "write_immutable_json",
 ]
