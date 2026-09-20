@@ -856,7 +856,7 @@ Define frozen input dataclass:
     CompanyLinkageSubmission
       ticker: str
       linkage: LinkageResult | None = None
-      hierarchical_linkage: HierarchicalLinkageSnapshot | None = None
+      hierarchical_linkage: HierarchicalLinkageResult | None = None
 
 Rules:
 
@@ -942,7 +942,7 @@ Define frozen dataclass:
       covered_dimensions: tuple[str, ...]
       linkage_status: CompanyLinkageStatus
       linkage: LinkageResult | None
-      hierarchical_linkage: HierarchicalLinkageResult | None
+      hierarchical_linkage: HierarchicalLinkageSnapshot | None
       cautions: tuple[str, ...]
 
 Cautions include:
@@ -1144,6 +1144,7 @@ Fixed v0.1 limitations:
       "provider retrieval and extraction occur outside this module",
       "theme package exact historical bytes are not recoverable from ReplayCycleResult alone",
       "research dossier does not grant trading permission",
+      "evidence payload content is committed by hash but not embedded in the dossier",
     )
 
 These are included in dossier_hash.
@@ -1567,9 +1568,14 @@ Export:
     ResearchWorkOrderPolicy
     ResearchWorkOrder
     ResearchEvidenceDirection
+    ResearchEvidenceInput
+    FrozenResearchEvidence
     ResearchEvidenceBinding
     CompanyResearchSubmission
+    NormalizedCompanyField
+    NormalizedCompanySnapshot
     CompanyLinkageSubmission
+    HierarchicalLinkageSnapshot
     CompanyLinkageStatus
     CompanyResearchAssessment
     ResearchFindingKind
@@ -1751,3 +1757,105 @@ Reject:
 Allow the same records with independent=False.
 
 Independence is explicit but cannot elevate model/inferred evidence into independent observed evidence.
+
+
+## 105. UTC timestamp normalization
+
+Use one explicit parser for:
+
+- source_cycle_as_of;
+- evidence_as_of;
+- EvidenceRecord.observed_at;
+- EvidenceRecord.market_asof;
+- EvidenceRecord.retrieved_at;
+- CompanyResearchSubmission.as_of.
+
+Rules:
+
+- date-only values normalize to that date at 23:59:59.999999 UTC;
+- naive datetimes are interpreted as UTC;
+- aware datetimes are converted to UTC.
+
+All temporal comparisons use normalized instants, never lexical string comparison.
+
+Invalid timestamps raise ValueError.
+
+## 106. Work-order policy canonicalization
+
+ResearchWorkOrderPolicy is treated semantically as sets of dimension names, not caller tuple order.
+
+Before policy_hash:
+
+- strip surrounding whitespace from every dimension;
+- reject blank dimensions;
+- reject duplicates;
+- sort each dimension tuple lexically.
+
+Changing only input tuple order must not change policy_hash or work_order_hash.
+
+## 107. Company submission canonicalization
+
+Before dossier input_hash and adapter normalization:
+
+- uppercase ticker;
+- copy raw_facts into a new plain dict;
+- reject blank raw-fact keys;
+- require every raw-fact value is RawFactValue-compatible;
+- deduplicate and lexically sort evidence_source_hashes.
+
+The caller's raw_facts mapping is never stored by reference.
+
+## 108. Finding canonicalization
+
+Before dossier hashing:
+
+- strip finding_id, dimension, and statement only of surrounding whitespace;
+- reject blank values after stripping;
+- uppercase target_ticker when present;
+- reject duplicate finding_id;
+- reject duplicate evidence_source_hashes inside one finding;
+- sort evidence_source_hashes lexically.
+
+Finding input order does not affect dossier identity.
+
+## 109. Linkage snapshot canonicalization
+
+For HierarchicalLinkageResult:
+
+- copy missing_controls into a tuple;
+- convert coefficients mapping into lexical (name, float(value)) tuples;
+- compute source_payload_hash from the complete original asdict payload before conversion.
+
+For LinkageResult:
+
+- validate ticker matches target;
+- copy the frozen dataclass value;
+- require all numeric values are finite when non-None.
+
+For hierarchical numeric fields and coefficients:
+
+- require finite values when non-None.
+
+NaN/Infinity are rejected before dossier hashing.
+
+## 110. Evidence snapshot completeness
+
+FrozenResearchEvidence is not a replacement for the original EvidenceRecord payload.
+
+It is an immutable commitment to that record.
+
+The snapshot must preserve enough metadata to locate/audit the original evidence and must bind payload_hash.
+
+ResearchDossier limitations therefore also include:
+
+    "evidence payload content is committed by hash but not embedded in the dossier"
+
+This limitation string is part of dossier_hash.
+
+## 111. Snapshot type-correctness acceptance
+
+CompanyLinkageSubmission accepts a real HierarchicalLinkageResult input.
+
+CompanyResearchAssessment exposes a HierarchicalLinkageSnapshot output.
+
+Mutating the original coefficients mapping after dossier construction must not affect the snapshot.
