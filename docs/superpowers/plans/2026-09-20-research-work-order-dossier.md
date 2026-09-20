@@ -3184,22 +3184,114 @@ Then import/export those 25 symbols in src/decision_lab/__init__.py and keep __a
 
 - [ ] **Step 9: Add real DataCenter/Genomics acceptance using existing theme packages**
 
-Use load_theme_package for:
+Append imports:
 
-- config/themes/datacenter_infra.yaml
-- config/themes/genomics_bio.yaml
+~~~python
+from pathlib import Path
 
-For each package, create a registered source replay with a coverage-pending market batch plus one strong independent external observation, select one effective universe ticker, build COMPANY_DEEP_DIVE, and assert:
+from decision_lab.themes import load_theme_package
+~~~
+
+Add the real-package replay helper:
+
+~~~python
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _archive_for_real_package(package):
+    theme = package.definition.theme_id
+    result = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(
+                ThemeReplayInput(
+                    package=package,
+                    market_spec=MarketObservationSpec(
+                        theme_id=theme,
+                        mode=MarketObservationMode.BASKET,
+                        benchmark="SPY",
+                        current_return_sessions=1,
+                        prior_return_sessions=1,
+                        min_basket_members=1,
+                        version="real-package-test",
+                    ),
+                    market_config=MarketObservationConfig(),
+                    bars=(
+                        MarketBar(
+                            symbol="SPY",
+                            session_date="2026-09-19",
+                            available_at="2026-09-19T21:00:00+00:00",
+                            close=100.0,
+                        ),
+                    ),
+                    market_source_ref=f"fixture:{theme}:market",
+                ),
+            ),
+            external_observations=(
+                _strong_observation(theme),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+    return build_replay_archive_record(result)
+
+
+def _first_effective_ticker(package):
+    candidates = package.universe.active_candidates(
+        as_of="2026-09-19"
+    )
+    assert candidates
+    return sorted(
+        candidate.ticker.upper()
+        for candidate in candidates
+    )[0]
+~~~
+
+Add the acceptance test:
 
 ~~~python
 def test_real_theme_packages_generate_domain_specific_company_requirements():
-    # Build both historical replay records with their real ThemePackage.
-    # Use explicit target chosen from package.universe.active_candidates("2026-09-19").
-    dc_order = ...
-    bio_order = ...
+    dc_package = load_theme_package(
+        ROOT / "config/themes/datacenter_infra.yaml"
+    )
+    bio_package = load_theme_package(
+        ROOT / "config/themes/genomics_bio.yaml"
+    )
+    dc_record = _archive_for_real_package(dc_package)
+    bio_record = _archive_for_real_package(bio_package)
+
+    dc_order = build_research_work_order(
+        dc_record,
+        "DataCenter_Infra",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=dc_package,
+        target_tickers=(
+            _first_effective_ticker(dc_package),
+        ),
+    )
+    bio_order = build_research_work_order(
+        bio_record,
+        "Genomics_Bio",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=bio_package,
+        target_tickers=(
+            _first_effective_ticker(bio_package),
+        ),
+    )
 
     assert dc_order.evidence_adapter == "industrials_infrastructure"
     assert bio_order.evidence_adapter == "biotech_clinical"
+    assert (
+        dc_order.source_routing_intent
+        is RoutingIntent.ORDINARY_FULL_RESEARCH
+    )
+    assert (
+        bio_order.source_routing_intent
+        is RoutingIntent.ORDINARY_FULL_RESEARCH
+    )
 
     dc_dimensions = {
         item.dimension
@@ -3218,7 +3310,7 @@ def test_real_theme_packages_generate_domain_specific_company_requirements():
     assert "clinical_phase" not in dc_dimensions
 ~~~
 
-Do not use network data; all bars/evidence are synthetic/public-safe fixtures.
+No network data is used; market/evidence inputs are synthetic and public-safe while package/universe lineage comes from the repository's real theme configs.
 
 - [ ] **Step 10: Run Task-4 tests and full regression**
 
