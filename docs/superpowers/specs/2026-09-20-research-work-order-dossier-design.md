@@ -940,7 +940,7 @@ Define frozen dataclass:
 
     CompanyResearchAssessment
       ticker: str
-      normalized_evidence: NormalizedCompanySnapshot
+      normalized_evidence: NormalizedCompanySnapshot | None
       evidence_source_hashes: tuple[str, ...]
       independent_source_count: int
       covered_dimensions: tuple[str, ...]
@@ -1864,3 +1864,19 @@ CompanyLinkageSubmission accepts a real HierarchicalLinkageResult input.
 CompanyResearchAssessment exposes a HierarchicalLinkageSnapshot output.
 
 Mutating the original coefficients mapping after dossier construction must not affect the snapshot.
+
+
+## 112. Partial company-assessment representation
+
+CompanyResearchAssessment exists for every work-order target, even during partial execution.
+
+If no CompanyResearchSubmission has been supplied yet:
+
+    normalized_evidence = None
+    covered_dimensions = ()
+
+Linkage status may still reflect a submitted linkage diagnostic.
+
+This allows a PARTIAL dossier to preserve real linkage progress without fabricating normalized company evidence.
+
+COMPLETE still requires every target normalized_evidence is non-None.
