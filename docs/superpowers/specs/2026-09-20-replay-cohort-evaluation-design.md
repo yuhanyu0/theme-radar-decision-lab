@@ -368,7 +368,7 @@ Otherwise:
 
 This prevents cohort logic from analyzing an allocation bound to a different scan state.
 
-## 21. Observation/theme consistency
+## 21. Observation/theme consistency and closure
 
 For every combined_observation:
 
@@ -378,7 +378,18 @@ If not:
 
     raise ValueError("observation theme missing from replay records")
 
-This ensures NOT_PRESENT really means there was no current observation for the theme.
+Then require current-observation closure:
+
+- every ROUTED ReplayThemeRecord has at least one combined_observation for its theme;
+- every NO_OBSERVATION ReplayThemeRecord has zero combined_observations for its theme;
+- every observation inside a MarketObservationBatch has the same theme_id as that batch/theme record;
+- every MarketObservationBatch observation appears exactly as a current observation in combined_observations.
+
+Any closure failure raises:
+
+    ValueError("inconsistent replay theme record")
+
+This prevents a hash-valid tampered archive from changing the primary evidence-evolution channel while retaining incompatible routing state. It also ensures NOT_PRESENT really means there was no current theme record, while NO_OBSERVATION means a registered current theme had no observation.
 
 ## 22. Independent evidence source collapse
 
@@ -617,6 +628,7 @@ If:
 
 If:
 
+    registered is True
     replay_status == ROUTED
     scan_result.forced_review is True
     allocation.forced_review is True
@@ -650,6 +662,7 @@ This is a valid existing allocator state: the scanner can surface an independent
 
 If:
 
+    registered is True
     forced_review is False
     tier == FULL_DECISION_RESEARCH
 
@@ -657,15 +670,27 @@ If:
 
 If:
 
+    registered is True
     forced_review is False
     tier == THEME_RESEARCH
 
 ### SCAN_ONLY
 
-If:
+If either:
 
+    registered is True
     forced_review is False
     tier == SCAN_ONLY
+
+or the valid unknown-theme state:
+
+    registered is False
+    forced_review is False
+    tier == SCAN_ONLY
+    "theme not registered"
+        in allocation_reasons
+
+An unregistered theme can never be classified as THEME_RESEARCH, FULL_DECISION_RESEARCH, or FORCED_REVIEW_CAPACITY_MISSED.
 
 Any other forced-review/tier combination is invalid:
 
@@ -688,6 +713,15 @@ A non-forced allocation must not carry:
 in allocation_reasons.
 
 A forced FULL allocation must not carry that capacity-exhausted reason.
+
+For unregistered routed themes:
+
+- tier must be SCAN_ONLY;
+- allocation_reasons must contain "theme not registered";
+- forced review may map only to FORCED_REVIEW_UNREGISTERED;
+- "forced review capacity exhausted" is invalid.
+
+These rules bind routing intent to registration status rather than trusting tier/reason strings independently.
 
 ## 35. TierTransition
 
