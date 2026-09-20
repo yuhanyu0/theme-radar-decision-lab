@@ -10,6 +10,7 @@ from .ledger import canonical_hash
 from .replay import ReplayCycleResult, ReplayStatus, ReplayThemeRecord
 from .replay_archive import ReplayArchiveRecord, build_replay_archive_record
 from .research_budget import ResearchTier
+from .scanner import SupportDirection
 
 SCHEMA_VERSION = "0.1"
 EVALUATION_SCOPE = "evidence_evolution_and_descriptive_system_transition"
@@ -277,6 +278,114 @@ def _validate_replay_semantics(result: ReplayCycleResult) -> None:
     for observation in result.combined_observations:
         if observation.theme_id not in records:
             raise ValueError("observation theme missing from replay records")
+
+    for item in result.theme_records:
+        _routing_intent(item)
+        _independent_evidence_state(result, item.theme_id)
+
+
+def _independent_evidence_state(
+    result: ReplayCycleResult,
+    theme_id: str,
+) -> IndependentEvidenceState:
+    grouped: dict[str, list[object]] = {}
+    for observation in result.combined_observations:
+        if observation.theme_id != theme_id:
+            continue
+        grouped.setdefault(observation.source_ref, []).append(observation)
+
+    support_refs: list[str] = []
+    contradiction_refs: list[str] = []
+    neutral_refs: list[str] = []
+
+    for source_ref, rows in grouped.items():
+        metadata = {
+            (row.source_type, row.is_independent)
+            for row in rows
+        }
+        if len(metadata) != 1:
+            raise ValueError("conflicting cohort source metadata")
+        if not rows[0].is_independent:
+            continue
+
+        directions = {row.support_direction for row in rows}
+        if SupportDirection.CONTRADICTING in directions:
+            contradiction_refs.append(source_ref)
+        elif SupportDirection.SUPPORTING in directions:
+            support_refs.append(source_ref)
+        else:
+            neutral_refs.append(source_ref)
+
+    support_refs.sort()
+    contradiction_refs.sort()
+    neutral_refs.sort()
+    independent_count = (
+        len(support_refs)
+        + len(contradiction_refs)
+        + len(neutral_refs)
+    )
+
+    if independent_count == 0:
+        evidence_class = EvidenceClass.NO_INDEPENDENT
+    elif support_refs and contradiction_refs:
+        evidence_class = EvidenceClass.MIXED
+    elif contradiction_refs:
+        evidence_class = EvidenceClass.CONTRADICTION_PRESENT
+    elif support_refs:
+        evidence_class = EvidenceClass.SUPPORT_ONLY
+    else:
+        evidence_class = EvidenceClass.NEUTRAL_ONLY
+
+    return IndependentEvidenceState(
+        evidence_class=evidence_class,
+        independent_source_count=independent_count,
+        supporting_source_count=len(support_refs),
+        contradicting_source_count=len(contradiction_refs),
+        neutral_source_count=len(neutral_refs),
+        supporting_source_refs=tuple(support_refs),
+        contradicting_source_refs=tuple(contradiction_refs),
+        neutral_source_refs=tuple(neutral_refs),
+    )
+
+
+def _routing_intent(item: ReplayThemeRecord) -> RoutingIntent:
+    if item.replay_status is ReplayStatus.NO_OBSERVATION:
+        return RoutingIntent.NO_OBSERVATION
+
+    scan = item.scan_result
+    allocation = item.allocation
+    if scan is None or allocation is None:
+        raise ValueError("inconsistent replay theme record")
+    if scan.forced_review != allocation.forced_review:
+        raise ValueError("forced-review flag mismatch")
+
+    exhausted = (
+        "forced review capacity exhausted"
+        in allocation.allocation_reasons
+    )
+
+    if scan.forced_review:
+        if (
+            allocation.tier is ResearchTier.FULL_DECISION_RESEARCH
+            and not exhausted
+        ):
+            return RoutingIntent.FORCED_FULL_REVIEW
+        if (
+            allocation.tier is ResearchTier.SCAN_ONLY
+            and exhausted
+        ):
+            return RoutingIntent.FORCED_REVIEW_CAPACITY_MISSED
+        raise ValueError("unsupported forced-review allocation state")
+
+    if exhausted:
+        raise ValueError("unsupported forced-review allocation state")
+    if allocation.tier is ResearchTier.FULL_DECISION_RESEARCH:
+        return RoutingIntent.ORDINARY_FULL_RESEARCH
+    if allocation.tier is ResearchTier.THEME_RESEARCH:
+        return RoutingIntent.ORDINARY_THEME_RESEARCH
+    if allocation.tier is ResearchTier.SCAN_ONLY:
+        return RoutingIntent.SCAN_ONLY
+    raise ValueError("unsupported forced-review allocation state")
 
 
 def _normalize_records(
