@@ -43,6 +43,7 @@ class RoutingIntent(str, Enum):
     ORDINARY_FULL_RESEARCH = "ORDINARY_FULL_RESEARCH"
     FORCED_FULL_REVIEW = "FORCED_FULL_REVIEW"
     FORCED_REVIEW_CAPACITY_MISSED = "FORCED_REVIEW_CAPACITY_MISSED"
+    FORCED_REVIEW_UNREGISTERED = "FORCED_REVIEW_UNREGISTERED"
 
 
 class ContradictionTransition(str, Enum):
@@ -366,6 +367,13 @@ def _routing_intent(item: ReplayThemeRecord) -> RoutingIntent:
 
     if scan.forced_review:
         if (
+            not item.registered
+            and allocation.tier is ResearchTier.SCAN_ONLY
+            and "theme not registered" in allocation.allocation_reasons
+            and not exhausted
+        ):
+            return RoutingIntent.FORCED_REVIEW_UNREGISTERED
+        if (
             allocation.tier is ResearchTier.FULL_DECISION_RESEARCH
             and not exhausted
         ):
@@ -386,6 +394,284 @@ def _routing_intent(item: ReplayThemeRecord) -> RoutingIntent:
     if allocation.tier is ResearchTier.SCAN_ONLY:
         return RoutingIntent.SCAN_ONLY
     raise ValueError("unsupported forced-review allocation state")
+
+
+_TIER_RANK = {
+    ResearchTier.SCAN_ONLY: 0,
+    ResearchTier.THEME_RESEARCH: 1,
+    ResearchTier.FULL_DECISION_RESEARCH: 2,
+}
+
+
+def _contradiction_transition(
+    source: IndependentEvidenceState,
+    future: IndependentEvidenceState | None,
+    presence: FuturePresence,
+) -> ContradictionTransition:
+    if (
+        presence is not FuturePresence.PRESENT
+        or future is None
+        or source.independent_source_count == 0
+        or future.independent_source_count == 0
+    ):
+        return ContradictionTransition.UNASSESSED
+
+    source_has = source.contradicting_source_count > 0
+    future_has = future.contradicting_source_count > 0
+    if not source_has and future_has:
+        return ContradictionTransition.EMERGED
+    if source_has and future_has:
+        return ContradictionTransition.PERSISTED
+    if source_has and not future_has:
+        return ContradictionTransition.RESOLVED
+    return ContradictionTransition.ABSENT
+
+
+def _tier_transition(
+    source: ResearchTier | None,
+    future: ResearchTier | None,
+) -> TierTransition:
+    if source is None or future is None:
+        return TierTransition.UNASSESSED
+    if source is future:
+        return TierTransition.SAME
+    if _TIER_RANK[future] > _TIER_RANK[source]:
+        return TierTransition.ESCALATED
+    return TierTransition.DEESCALATED
+
+
+def _delta(source, future):
+    if source is None or future is None:
+        return None
+    return future - source
+
+
+def _system_fields(item: ReplayThemeRecord) -> dict[str, object]:
+    scan = item.scan_result
+    allocation = item.allocation
+    return {
+        "scanner_config_hash": None if scan is None else scan.config_hash,
+        "priority": None if scan is None else scan.research_priority,
+        "confidence": None if scan is None else scan.evidence_confidence,
+        "novelty": None if scan is None else scan.novelty_score,
+        "lifecycle": None if scan is None else scan.lifecycle_recommendation,
+        "forced_review": None if scan is None else scan.forced_review,
+        "tier": None if allocation is None else allocation.tier,
+    }
+
+
+def _build_transition(
+    *,
+    source_index: int,
+    source_record: ReplayArchiveRecord,
+    future_index: int | None,
+    future_record: ReplayArchiveRecord | None,
+    horizon: int,
+    source_theme_record: ReplayThemeRecord,
+) -> ReplayCohortTransition:
+    theme_id = source_theme_record.theme_id
+    source_evidence = _independent_evidence_state(
+        source_record.replay_result,
+        theme_id,
+    )
+    source_system = _system_fields(source_theme_record)
+    routing_intent = _routing_intent(source_theme_record)
+
+    future_theme_record = None
+    if future_record is None:
+        future_presence = FuturePresence.RIGHT_CENSORED
+    else:
+        future_by_theme = {
+            item.theme_id: item
+            for item in future_record.replay_result.theme_records
+        }
+        future_theme_record = future_by_theme.get(theme_id)
+        future_presence = (
+            FuturePresence.NOT_PRESENT
+            if future_theme_record is None
+            else FuturePresence.PRESENT
+        )
+
+    future_evidence = (
+        None
+        if future_theme_record is None
+        else _independent_evidence_state(
+            future_record.replay_result,
+            theme_id,
+        )
+    )
+    future_system = (
+        None
+        if future_theme_record is None
+        else _system_fields(future_theme_record)
+    )
+
+    if (
+        future_evidence is not None
+        and source_evidence.independent_source_count > 0
+        and future_evidence.independent_source_count > 0
+    ):
+        evidence_class_changed = (
+            source_evidence.evidence_class
+            is not future_evidence.evidence_class
+        )
+    else:
+        evidence_class_changed = None
+
+    support_delta = (
+        None
+        if future_presence is not FuturePresence.PRESENT
+        else (
+            future_evidence.supporting_source_count
+            - source_evidence.supporting_source_count
+        )
+    )
+    contradiction_delta = (
+        None
+        if future_presence is not FuturePresence.PRESENT
+        else (
+            future_evidence.contradicting_source_count
+            - source_evidence.contradicting_source_count
+        )
+    )
+
+    source_scanner_hash = source_system["scanner_config_hash"]
+    future_scanner_hash = (
+        None
+        if future_system is None
+        else future_system["scanner_config_hash"]
+    )
+    scanner_config_changed = (
+        None
+        if source_scanner_hash is None or future_scanner_hash is None
+        else source_scanner_hash != future_scanner_hash
+    )
+
+    source_tier = source_system["tier"]
+    future_tier = None if future_system is None else future_system["tier"]
+
+    return ReplayCohortTransition(
+        source_cycle_index=source_index,
+        future_cycle_index=future_index,
+        source_cycle_as_of=source_record.cycle_as_of,
+        future_cycle_as_of=(
+            None if future_record is None else future_record.cycle_as_of
+        ),
+        horizon_cycles=horizon,
+        source_archive_record_hash=source_record.archive_record_hash,
+        future_archive_record_hash=(
+            None
+            if future_record is None
+            else future_record.archive_record_hash
+        ),
+        theme_id=theme_id,
+        routing_intent=routing_intent,
+        source_registered=source_theme_record.registered,
+        future_presence=future_presence,
+        future_registered=(
+            None
+            if future_theme_record is None
+            else future_theme_record.registered
+        ),
+        source_evidence_state=source_evidence,
+        future_evidence_state=future_evidence,
+        support_delta=support_delta,
+        contradiction_delta=contradiction_delta,
+        contradiction_transition=_contradiction_transition(
+            source_evidence,
+            future_evidence,
+            future_presence,
+        ),
+        evidence_class_changed=evidence_class_changed,
+        source_replay_status=source_theme_record.replay_status,
+        future_replay_status=(
+            None
+            if future_theme_record is None
+            else future_theme_record.replay_status
+        ),
+        source_scanner_config_hash=source_scanner_hash,
+        future_scanner_config_hash=future_scanner_hash,
+        scanner_config_changed=scanner_config_changed,
+        source_priority=source_system["priority"],
+        future_priority=(
+            None if future_system is None else future_system["priority"]
+        ),
+        priority_delta=_delta(
+            source_system["priority"],
+            None if future_system is None else future_system["priority"],
+        ),
+        source_confidence=source_system["confidence"],
+        future_confidence=(
+            None if future_system is None else future_system["confidence"]
+        ),
+        confidence_delta=_delta(
+            source_system["confidence"],
+            None if future_system is None else future_system["confidence"],
+        ),
+        source_novelty=source_system["novelty"],
+        future_novelty=(
+            None if future_system is None else future_system["novelty"]
+        ),
+        novelty_delta=_delta(
+            source_system["novelty"],
+            None if future_system is None else future_system["novelty"],
+        ),
+        source_lifecycle=source_system["lifecycle"],
+        future_lifecycle=(
+            None if future_system is None else future_system["lifecycle"]
+        ),
+        source_forced_review=source_system["forced_review"],
+        future_forced_review=(
+            None if future_system is None else future_system["forced_review"]
+        ),
+        source_tier=source_tier,
+        future_tier=future_tier,
+        tier_transition=_tier_transition(source_tier, future_tier),
+    )
+
+
+def _build_transitions(
+    records: tuple[ReplayArchiveRecord, ...],
+    horizons: tuple[int, ...],
+) -> tuple[ReplayCohortTransition, ...]:
+    rows: list[ReplayCohortTransition] = []
+    for source_index, source_record in enumerate(records):
+        source_records = sorted(
+            source_record.replay_result.theme_records,
+            key=lambda item: item.theme_id,
+        )
+        for horizon in horizons:
+            candidate_future_index = source_index + horizon
+            future_record = (
+                None
+                if candidate_future_index >= len(records)
+                else records[candidate_future_index]
+            )
+            for theme_record in source_records:
+                rows.append(
+                    _build_transition(
+                        source_index=source_index,
+                        source_record=source_record,
+                        future_index=(
+                            None
+                            if future_record is None
+                            else candidate_future_index
+                        ),
+                        future_record=future_record,
+                        horizon=horizon,
+                        source_theme_record=theme_record,
+                    )
+                )
+    return tuple(
+        sorted(
+            rows,
+            key=lambda item: (
+                item.source_cycle_index,
+                item.horizon_cycles,
+                item.theme_id,
+            ),
+        )
+    )
 
 
 def _normalize_records(
@@ -460,7 +746,10 @@ def evaluate_replay_cohort(
         normalized_records,
         normalized_horizons,
     )
-    transitions: tuple[ReplayCohortTransition, ...] = ()
+    transitions = _build_transitions(
+        normalized_records,
+        normalized_horizons,
+    )
     summaries: tuple[ReplayCohortSummary, ...] = ()
     result_hash = _cohort_result_hash(
         horizons=normalized_horizons,
