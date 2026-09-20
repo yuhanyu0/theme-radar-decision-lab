@@ -282,6 +282,18 @@ Create tests/test_replay.py with:
         assert result.theme_records[0].replay_status is ReplayStatus.NO_OBSERVATION
 
 
+    def test_invalid_theme_package_effective_date_fails_closed():
+        package = _package(effective_from="not-a-date")
+
+        with pytest.raises(
+            ValueError,
+            match="invalid theme package effective date",
+        ):
+            run_replay_cycle(
+                _cycle(themes=(_theme_input(package),))
+            )
+
+
     def test_market_source_ref_must_be_nonempty():
         package = _package()
         bad = replace(
@@ -356,7 +368,7 @@ Create src/decision_lab/replay.py with:
     from __future__ import annotations
 
     from collections.abc import Sequence
-    from dataclasses import asdict, dataclass
+    from dataclasses import asdict, dataclass, field
     from datetime import UTC, date, datetime
     from enum import Enum
 
@@ -403,8 +415,10 @@ Create src/decision_lab/replay.py with:
         external_observations: tuple[ThemeScanObservation, ...] = ()
         prior_scan_results: tuple[ThemeScanResult, ...] = ()
         prior_allocations: tuple[ResearchAllocation, ...] = ()
-        scanner_config: ScannerConfig = ScannerConfig()
-        budget_config: ResearchBudgetConfig = ResearchBudgetConfig()
+        scanner_config: ScannerConfig = field(default_factory=ScannerConfig)
+        budget_config: ResearchBudgetConfig = field(
+            default_factory=ResearchBudgetConfig
+        )
 
 
     @dataclass(frozen=True)
@@ -442,10 +456,23 @@ Create src/decision_lab/replay.py with:
         definition: ThemeDefinition,
         cycle_date: date,
     ) -> bool:
-        cycle = cycle_date.isoformat()
-        if definition.effective_from is not None and cycle < definition.effective_from:
+        try:
+            effective_from = (
+                None
+                if definition.effective_from is None
+                else date.fromisoformat(definition.effective_from)
+            )
+            effective_to = (
+                None
+                if definition.effective_to is None
+                else date.fromisoformat(definition.effective_to)
+            )
+        except ValueError as exc:
+            raise ValueError("invalid theme package effective date") from exc
+
+        if effective_from is not None and cycle_date < effective_from:
             return False
-        if definition.effective_to is not None and cycle >= definition.effective_to:
+        if effective_to is not None and cycle_date >= effective_to:
             return False
         return True
 
