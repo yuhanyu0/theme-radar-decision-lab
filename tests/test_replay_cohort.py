@@ -966,6 +966,29 @@ def test_three_cycle_cohort_tracks_persist_resolve_emerge_and_absence():
     )
 
 
+def test_three_cycle_cohort_emits_expected_summary_groups():
+    result = evaluate_replay_cohort(
+        _three_cycle_cohort(),
+        horizons=(1, 2),
+    )
+
+    keys = {
+        (item.routing_intent, item.horizon_cycles)
+        for item in result.summaries
+    }
+    expected_intents = {
+        RoutingIntent.FORCED_FULL_REVIEW,
+        RoutingIntent.ORDINARY_FULL_RESEARCH,
+        RoutingIntent.SCAN_ONLY,
+        RoutingIntent.NO_OBSERVATION,
+    }
+    assert keys == {
+        (intent, horizon)
+        for intent in expected_intents
+        for horizon in (1, 2)
+    }
+
+
 def test_summary_denominators_are_complete_partitions():
     result = evaluate_replay_cohort(
         _three_cycle_cohort(),
