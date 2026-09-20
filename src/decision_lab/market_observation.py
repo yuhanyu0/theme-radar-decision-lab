@@ -5,6 +5,9 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
 from enum import Enum
 from math import isfinite
+from pathlib import Path
+
+import yaml
 
 from .ledger import canonical_hash
 from .scanner import SupportDirection, ThemeScanObservation
@@ -117,6 +120,30 @@ class MarketObservationConfig:
             >= self.proxy_support_persistence_min
         ):
             raise ValueError("proxy support/contradiction regions overlap")
+
+
+def load_market_observation_config(
+    path: str | Path,
+) -> MarketObservationConfig:
+    payload = dict(yaml.safe_load(Path(path).read_text()) or {})
+    payload["calibration_label"] = "uncalibrated"
+    config = MarketObservationConfig(**payload)
+    config.validate()
+    return config
+
+
+def load_market_observation_spec(
+    path: str | Path,
+) -> MarketObservationSpec:
+    payload = dict(yaml.safe_load(Path(path).read_text()) or {})
+    payload["mode"] = MarketObservationMode(payload["mode"])
+    payload["proxies"] = tuple(
+        str(item).upper() for item in payload.get("proxies", ())
+    )
+    payload["benchmark"] = str(payload["benchmark"]).upper()
+    spec = MarketObservationSpec(**payload)
+    spec.validate()
+    return spec
 
 
 @dataclass(frozen=True)
