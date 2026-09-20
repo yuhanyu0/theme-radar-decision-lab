@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from dataclasses import replace
 
 import pytest
@@ -9,10 +11,17 @@ from decision_lab.market_observation import (
     MarketObservationSpec,
     MarketObservationStatus,
     adapt_market_observations,
+    load_market_observation_config,
+    load_market_observation_spec,
 )
 from decision_lab.ledger import canonical_hash
 from decision_lab.scanner import ScannerConfig, SupportDirection, rank_themes
-from decision_lab.themes import ThemeDefinition, ThemeKeyPolicy, ThemePackage
+from decision_lab.themes import (
+    ThemeDefinition,
+    ThemeKeyPolicy,
+    ThemePackage,
+    load_theme_package,
+)
 from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
 
@@ -778,3 +787,148 @@ def test_source_level_and_batch_hashes_bind_only_used_bars():
     source_hashes = sorted(d.input_hash for d in batch.diagnostics)
     assert batch.input_hash == canonical_hash(source_hashes)
     assert all(d.diagnostic_hash for d in batch.diagnostics)
+
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_default_market_observation_config_matches_approved_contract():
+    config = load_market_observation_config(
+        ROOT / "config/adapters/market_observation_defaults.yaml"
+    )
+
+    assert config.version == "0.1"
+    assert config.calibration_label == "uncalibrated"
+    assert config.relative_strength_scale == 0.20
+    assert config.novelty_scale == 0.10
+    assert config.basket_contradiction_excess_max == -0.02
+    assert config.basket_contradiction_breadth_max == 0.25
+    assert config.proxy_support_excess_min == 0.02
+    assert config.proxy_support_persistence_min == 0.60
+
+
+def test_theme_market_observation_specs_load_exactly():
+    dc = load_market_observation_spec(
+        ROOT / "config/market_observations/datacenter_infra.yaml"
+    )
+    bio = load_market_observation_spec(
+        ROOT / "config/market_observations/genomics_bio.yaml"
+    )
+
+    assert dc.mode is MarketObservationMode.BASKET
+    assert dc.benchmark == "SPY"
+    assert dc.proxies == ()
+
+    assert bio.mode is MarketObservationMode.PROXY
+    assert bio.benchmark == "SPY"
+    assert bio.proxies == ("ARKG", "XBI")
+
+
+def test_real_genomics_package_cannot_retroactively_form_five_session_basket():
+    package = load_theme_package(ROOT / "config/themes/genomics_bio.yaml")
+    config = MarketObservationConfig()
+    spec = MarketObservationSpec(
+        theme_id="Genomics_Bio",
+        mode=MarketObservationMode.BASKET,
+        benchmark="SPY",
+        proxies=(),
+        current_return_sessions=2,
+        prior_return_sessions=2,
+        min_basket_members=3,
+        version="test",
+    )
+    sessions = [
+        "2026-09-14",
+        "2026-09-15",
+        "2026-09-16",
+        "2026-09-17",
+        "2026-09-18",
+    ]
+    bars = [
+        _bar("SPY", session, 100 + index)
+        for index, session in enumerate(sessions)
+    ]
+    for symbol in ("CRSP", "BEAM", "NTLA", "ILMN"):
+        bars.extend(
+            _bar(symbol, session, 100 + index)
+            for index, session in enumerate(sessions)
+        )
+
+    batch = adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=spec,
+        config=config,
+        cycle_as_of="2026-09-18",
+        market_source_ref="fixture:genomics-no-retro",
+    )
+
+    assert batch.observations == ()
+    assert batch.diagnostics[0].status is MarketObservationStatus.COVERAGE_PENDING
+    assert batch.diagnostics[0].current_member_count == 0
+
+
+def test_adapter_does_not_mutate_theme_package_or_permission_state():
+    from copy import deepcopy
+
+    package = load_theme_package(ROOT / "config/themes/genomics_bio.yaml")
+    before = deepcopy(package)
+    policy_before = package.theme_key_policy
+
+    sessions = [
+        "2026-09-14",
+        "2026-09-15",
+        "2026-09-16",
+        "2026-09-17",
+        "2026-09-18",
+    ]
+    bars = [
+        _bar("SPY", session, 100)
+        for session in sessions
+    ] + [
+        _bar("ARKG", session, close)
+        for session, close in zip(
+            sessions,
+            [100, 100, 100, 110, 120],
+            strict=True,
+        )
+    ]
+    spec = replace(
+        load_market_observation_spec(
+            ROOT / "config/market_observations/genomics_bio.yaml"
+        ),
+        current_return_sessions=2,
+        prior_return_sessions=2,
+        proxies=("ARKG",),
+    )
+
+    adapt_market_observations(
+        package=package,
+        bars=bars,
+        spec=spec,
+        config=MarketObservationConfig(),
+        cycle_as_of="2026-09-18",
+        market_source_ref="fixture:no-mutation",
+    )
+
+    assert package == before
+    assert package.theme_key_policy == policy_before
+
+
+def test_market_observation_interfaces_are_publicly_importable():
+    import decision_lab
+
+    for name in (
+        "MarketBar",
+        "MarketObservationBatch",
+        "MarketObservationConfig",
+        "MarketObservationDiagnostics",
+        "MarketObservationMode",
+        "MarketObservationSpec",
+        "MarketObservationStatus",
+        "adapt_market_observations",
+        "load_market_observation_config",
+        "load_market_observation_spec",
+    ):
+        assert getattr(decision_lab, name) is not None
