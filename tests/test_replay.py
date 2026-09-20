@@ -1035,3 +1035,56 @@ def test_external_observation_requires_auditable_identity(field_name, message):
         run_replay_cycle(
             _cycle(external_observations=(invalid,))
         )
+
+
+
+def test_market_adapter_validation_error_propagates():
+    package = _package(theme="ThemeA")
+    mismatched_spec = _spec("OtherTheme")
+    theme_input = ThemeReplayInput(
+        package=package,
+        market_spec=mismatched_spec,
+        market_config=MarketObservationConfig(),
+        bars=(),
+        market_source_ref="fixture:adapter-error",
+    )
+
+    with pytest.raises(ValueError, match="spec theme does not match package"):
+        run_replay_cycle(_cycle(themes=(theme_input,)))
+
+
+def test_invalid_cycle_as_of_fails_closed():
+    with pytest.raises(ValueError):
+        run_replay_cycle(_cycle(cycle_as_of="not-a-date"))
+
+
+def test_replay_stage_outputs_are_lexically_deterministic():
+    dc, bio = _real_theme_inputs()
+    result = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(bio, dc),
+            external_observations=(
+                _radar_observation("Rates"),
+                _radar_observation("DataCenter_Infra"),
+                _radar_observation("Genomics_Bio"),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+
+    assert [item.theme_id for item in result.market_batches] == sorted(
+        item.theme_id for item in result.market_batches
+    )
+    assert [item.theme_id for item in result.scan_results] == sorted(
+        item.theme_id for item in result.scan_results
+    )
+    assert [item.theme_id for item in result.allocations] == sorted(
+        item.theme_id for item in result.allocations
+    )
+    assert [item.theme_id for item in result.theme_records] == sorted(
+        item.theme_id for item in result.theme_records
+    )
