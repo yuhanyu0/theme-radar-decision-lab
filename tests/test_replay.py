@@ -1,6 +1,7 @@
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,8 @@ from decision_lab.market_observation import (
     MarketObservationConfig,
     MarketObservationMode,
     MarketObservationSpec,
+    load_market_observation_config,
+    load_market_observation_spec,
 )
 from decision_lab.replay import (
     ReplayCycleInput,
@@ -28,6 +31,7 @@ from decision_lab.themes import (
     ThemeKeyPolicy,
     ThemeLifecycleState,
     ThemePackage,
+    load_theme_package,
 )
 from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
@@ -790,3 +794,208 @@ def test_result_hash_binds_output_not_only_input_hash():
     }
 
     assert result.result_hash == canonical_hash(payload)
+
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+REPLAY_SESSIONS = (
+    "2026-09-03",
+    "2026-09-04",
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11",
+    "2026-09-14",
+    "2026-09-15",
+    "2026-09-16",
+    "2026-09-17",
+    "2026-09-18",
+)
+
+
+def _series(symbol, closes):
+    return tuple(
+        MarketBar(
+            symbol=symbol,
+            session_date=session,
+            available_at=f"{session}T21:00:00+00:00",
+            close=close,
+        )
+        for session, close in zip(REPLAY_SESSIONS, closes, strict=True)
+    )
+
+
+def _datacenter_bars():
+    benchmark = _series("SPY", [100] * 11)
+    be = _series(
+        "BE",
+        [100, 102, 104, 106, 108, 110, 106, 102, 98, 94, 90],
+    )
+    nrg = _series(
+        "NRG",
+        [100, 101, 102, 103, 104, 105, 102, 99, 96, 93, 90],
+    )
+    ceg = _series(
+        "CEG",
+        [100, 102, 103, 105, 106, 108, 106, 103, 100, 98, 95],
+    )
+    return benchmark + be + nrg + ceg
+
+
+def _genomics_bars():
+    benchmark = _series("SPY", [100] * 11)
+    arkg = _series(
+        "ARKG",
+        [100, 99, 98, 97, 96, 95, 100, 105, 110, 115, 120],
+    )
+    xbi = _series(
+        "XBI",
+        [100, 99, 98, 97, 96, 96, 96.2, 96.4, 96.6, 96.8, 97.0],
+    )
+    return benchmark + arkg + xbi
+
+
+def _real_theme_inputs():
+    market_config = load_market_observation_config(
+        ROOT / "config/adapters/market_observation_defaults.yaml"
+    )
+
+    dc_package = load_theme_package(
+        ROOT / "config/themes/datacenter_infra.yaml"
+    )
+    dc_spec = load_market_observation_spec(
+        ROOT / "config/market_observations/datacenter_infra.yaml"
+    )
+    dc = ThemeReplayInput(
+        package=dc_package,
+        market_spec=dc_spec,
+        market_config=market_config,
+        bars=_datacenter_bars(),
+        market_source_ref="fixture:e2e:datacenter",
+    )
+
+    bio_package = load_theme_package(
+        ROOT / "config/themes/genomics_bio.yaml"
+    )
+    bio_spec = load_market_observation_spec(
+        ROOT / "config/market_observations/genomics_bio.yaml"
+    )
+    bio = ThemeReplayInput(
+        package=bio_package,
+        market_spec=bio_spec,
+        market_config=market_config,
+        bars=_genomics_bars(),
+        market_source_ref="fixture:e2e:genomics",
+    )
+    return dc, bio
+
+
+def test_full_end_to_end_replay_separates_risk_opportunity_unknown_and_no_observation():
+    dc, bio = _real_theme_inputs()
+    quiet = _coverage_pending_theme_input("QuietTheme")
+
+    result = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(bio, quiet, dc),
+            external_observations=(
+                _radar_observation(
+                    "DataCenter_Infra",
+                    discovery=0.9,
+                    novelty=0.8,
+                ),
+                _radar_observation(
+                    "Genomics_Bio",
+                    discovery=0.85,
+                    novelty=0.75,
+                ),
+                _radar_observation(
+                    "Rates",
+                    discovery=0.8,
+                    novelty=0.6,
+                ),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+
+    records = {item.theme_id: item for item in result.theme_records}
+
+    dc_record = records["DataCenter_Infra"]
+    assert dc_record.replay_status is ReplayStatus.ROUTED
+    assert dc_record.scan_result is not None
+    assert dc_record.scan_result.forced_review
+    assert dc_record.scan_result.independent_contradiction_count >= 1
+    assert dc_record.allocation.tier is ResearchTier.FULL_DECISION_RESEARCH
+    assert dc_record.allocation.forced_review
+
+    bio_record = records["Genomics_Bio"]
+    assert bio_record.replay_status is ReplayStatus.ROUTED
+    assert bio_record.scan_result is not None
+    assert bio_record.scan_result.independent_support_count >= 1
+    assert bio_record.allocation.tier is ResearchTier.FULL_DECISION_RESEARCH
+    assert not bio_record.allocation.forced_review
+    assert not bio.package.theme_key_policy.evaluate(
+        flow=1.0,
+        structure=1.0,
+        valid_sessions=100,
+        permission="full",
+    ).satisfied
+
+    rates_record = records["Rates"]
+    assert not rates_record.registered
+    assert rates_record.allocation.tier is ResearchTier.SCAN_ONLY
+
+    quiet_record = records["QuietTheme"]
+    assert quiet_record.registered
+    assert quiet_record.replay_status is ReplayStatus.NO_OBSERVATION
+    assert quiet_record.scan_result is None
+    assert quiet_record.allocation is None
+
+    assert [x.theme_id for x in result.market_batches] == [
+        "DataCenter_Infra",
+        "Genomics_Bio",
+        "QuietTheme",
+    ]
+    assert [x.theme_id for x in result.theme_records] == [
+        "DataCenter_Infra",
+        "Genomics_Bio",
+        "QuietTheme",
+        "Rates",
+    ]
+
+
+def test_replay_does_not_mutate_real_packages_or_inputs():
+    dc, bio = _real_theme_inputs()
+    replay_input = ReplayCycleInput(
+        cycle_as_of="2026-09-19",
+        themes=(dc, bio),
+        external_observations=(),
+        prior_scan_results=(),
+        prior_allocations=(),
+        scanner_config=ScannerConfig(),
+        budget_config=ResearchBudgetConfig(),
+    )
+    before = deepcopy(replay_input)
+
+    run_replay_cycle(replay_input)
+
+    assert replay_input == before
+
+
+def test_replay_interfaces_are_publicly_importable():
+    import decision_lab
+
+    for name in (
+        "ReplayCycleInput",
+        "ReplayCycleResult",
+        "ReplayStatus",
+        "ReplayThemeRecord",
+        "ThemeReplayInput",
+        "run_replay_cycle",
+    ):
+        assert getattr(decision_lab, name) is not None
