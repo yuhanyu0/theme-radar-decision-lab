@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -24,7 +25,9 @@ from decision_lab.research_execution import (
     CompanyLinkageStatus,
     CompanyLinkageSubmission,
     CompanyResearchSubmission,
+    ResearchDossierStatus,
     ResearchEvidenceInput,
+    ResearchExecutionClosure,
     ResearchFinding,
     ResearchFindingKind,
     ResearchWorkOrderPolicy,
@@ -35,6 +38,7 @@ from decision_lab.research_execution import (
     _normalize_findings,
     _normalize_linkage_submissions,
     _parse_utc,
+    build_research_dossier,
     build_research_work_order,
 )
 from decision_lab.scanner import (
@@ -47,6 +51,7 @@ from decision_lab.themes import (
     ThemeKeyPolicy,
     ThemeLifecycleState,
     ThemePackage,
+    load_theme_package,
 )
 from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
@@ -1107,3 +1112,409 @@ def test_non_finite_linkage_is_rejected():
             ),
             order=order,
         )
+
+
+
+def test_empty_open_dossier_is_not_started():
+    record = _unregistered_forced_archive()
+    order = build_research_work_order(
+        record,
+        "UnknownRisk",
+        ResearchMode.THEME_REASSESSMENT,
+    )
+
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20",
+        closure=ResearchExecutionClosure.OPEN,
+    )
+
+    assert dossier.status is ResearchDossierStatus.NOT_STARTED
+    assert dossier.unsatisfied_requirements == order.requirements
+
+
+def test_partial_open_and_blocked_closed_are_distinct():
+    record = _unregistered_forced_archive()
+    order = build_research_work_order(
+        record,
+        "UnknownRisk",
+        ResearchMode.THEME_REASSESSMENT,
+    )
+    evidence = _evidence(
+        evidence_id="ev1",
+        source_ref="official:risk",
+        theme="UnknownRisk",
+        payload={"theme_structure": "weak"},
+        source_type="official_macro",
+    )
+    inputs = (
+        ResearchEvidenceInput(
+            evidence=evidence,
+            independent=True,
+            direction=ResearchEvidenceDirection.CONTRADICTING,
+            dimensions=("theme_structure",),
+            target_ticker=None,
+        ),
+    )
+
+    partial = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=inputs,
+    )
+    blocked = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20",
+        closure=ResearchExecutionClosure.CLOSED,
+        evidence_inputs=inputs,
+    )
+
+    assert partial.status is ResearchDossierStatus.PARTIAL
+    assert blocked.status is ResearchDossierStatus.BLOCKED_INSUFFICIENT_EVIDENCE
+
+
+def test_complete_theme_reassessment_can_still_be_contradictory_and_unresolved():
+    record = _unregistered_forced_archive()
+    policy = replace(
+        ResearchWorkOrderPolicy(),
+        minimum_independent_sources=1,
+    )
+    order = build_research_work_order(
+        record,
+        "UnknownRisk",
+        ResearchMode.THEME_REASSESSMENT,
+        policy=policy,
+    )
+    evidence = _evidence(
+        evidence_id="ev1",
+        source_ref="official:risk",
+        theme="UnknownRisk",
+        payload={"all": "covered"},
+        source_type="official_macro",
+    )
+    dimensions = tuple(
+        item.dimension for item in order.requirements
+    )
+
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=ResearchEvidenceDirection.CONTRADICTING,
+                dimensions=dimensions,
+                target_ticker=None,
+            ),
+        ),
+        findings=(
+            ResearchFinding(
+                finding_id="unresolved",
+                kind=ResearchFindingKind.UNRESOLVED,
+                direction=None,
+                dimension="theme_structure",
+                target_ticker=None,
+                statement="Cause remains unresolved.",
+                evidence_source_hashes=(),
+            ),
+        ),
+    )
+
+    assert dossier.status is ResearchDossierStatus.COMPLETE
+    assert dossier.contradictions_present
+    assert dossier.unresolved_present
+
+
+def test_company_dossier_requires_normalized_dimension_independence_and_linkage():
+    record, package = _registered_archive()
+    policy = replace(
+        ResearchWorkOrderPolicy(),
+        industrials_company_dimensions=("growth",),
+        minimum_independent_sources=1,
+        minimum_independent_sources_per_company=1,
+    )
+    order = build_research_work_order(
+        record,
+        "WorkTheme",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=package,
+        target_tickers=("AAA",),
+        policy=policy,
+    )
+    evidence = _evidence(
+        evidence_id="aaa",
+        source_ref="sec:aaa",
+        ticker="AAA",
+        payload={"revenue_growth": 0.2},
+    )
+    evidence_input = ResearchEvidenceInput(
+        evidence=evidence,
+        independent=True,
+        direction=ResearchEvidenceDirection.SUPPORTING,
+        dimensions=("growth",),
+        target_ticker="AAA",
+    )
+    company = CompanyResearchSubmission(
+        ticker="AAA",
+        as_of="2026-09-20",
+        adapter_name="industrials_infrastructure",
+        raw_facts={"revenue_growth": 0.2},
+        evidence_source_hashes=(evidence.source_hash,),
+    )
+
+    without_linkage = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(evidence_input,),
+        company_submissions=(company,),
+    )
+    complete = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(evidence_input,),
+        company_submissions=(company,),
+        linkage_submissions=(
+            CompanyLinkageSubmission(
+                ticker="AAA",
+                linkage=_usable_linkage(),
+            ),
+        ),
+    )
+
+    assert without_linkage.status is ResearchDossierStatus.PARTIAL
+    assert complete.status is ResearchDossierStatus.COMPLETE
+
+
+def test_tampered_work_order_is_rejected_by_dossier_builder():
+    record = _unregistered_forced_archive()
+    order = build_research_work_order(
+        record,
+        "UnknownRisk",
+        ResearchMode.THEME_REASSESSMENT,
+    )
+    tampered = replace(
+        order,
+        minimum_independent_sources=999,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="invalid research work order",
+    ):
+        build_research_dossier(
+            tampered,
+            evidence_as_of="2026-09-20",
+            closure=ResearchExecutionClosure.OPEN,
+        )
+
+
+def test_dossier_input_order_and_timezone_spelling_are_semantically_irrelevant():
+    record = _unregistered_forced_archive()
+    policy = replace(
+        ResearchWorkOrderPolicy(),
+        minimum_independent_sources=1,
+    )
+    order = build_research_work_order(
+        record,
+        "UnknownRisk",
+        ResearchMode.THEME_REASSESSMENT,
+        policy=policy,
+    )
+    first_evidence = _evidence(
+        evidence_id="a",
+        source_ref="official:a",
+        theme="UnknownRisk",
+        payload={"a": 1},
+        source_type="official_macro",
+    )
+    second_evidence = _evidence(
+        evidence_id="b",
+        source_ref="industry:b",
+        theme="UnknownRisk",
+        payload={"b": 2},
+        source_type="industry_primary",
+    )
+    dimensions = tuple(
+        item.dimension for item in order.requirements
+    )
+    a = ResearchEvidenceInput(
+        evidence=first_evidence,
+        independent=True,
+        direction=ResearchEvidenceDirection.SUPPORTING,
+        dimensions=dimensions[:2],
+        target_ticker=None,
+    )
+    b = ResearchEvidenceInput(
+        evidence=second_evidence,
+        independent=True,
+        direction=ResearchEvidenceDirection.CONTRADICTING,
+        dimensions=dimensions[2:],
+        target_ticker=None,
+    )
+
+    first = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T23:00:00+00:00",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(a, b),
+    )
+    second = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T19:00:00-04:00",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(b, a),
+    )
+
+    assert first == second
+    assert first.input_hash == second.input_hash
+    assert first.dossier_hash == second.dossier_hash
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _archive_for_real_package(package):
+    theme = package.definition.theme_id
+    result = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(
+                ThemeReplayInput(
+                    package=package,
+                    market_spec=MarketObservationSpec(
+                        theme_id=theme,
+                        mode=MarketObservationMode.BASKET,
+                        benchmark="SPY",
+                        current_return_sessions=1,
+                        prior_return_sessions=1,
+                        min_basket_members=1,
+                        version="real-package-test",
+                    ),
+                    market_config=MarketObservationConfig(),
+                    bars=(
+                        MarketBar(
+                            symbol="SPY",
+                            session_date="2026-09-19",
+                            available_at="2026-09-19T21:00:00+00:00",
+                            close=100.0,
+                        ),
+                    ),
+                    market_source_ref=f"fixture:{theme}:market",
+                ),
+            ),
+            external_observations=(
+                _strong_observation(theme),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+    return build_replay_archive_record(result)
+
+
+def _first_effective_ticker(package):
+    candidates = package.universe.active_candidates(
+        as_of="2026-09-19"
+    )
+    assert candidates
+    return sorted(
+        candidate.ticker.upper()
+        for candidate in candidates
+    )[0]
+
+
+def test_real_theme_packages_generate_domain_specific_company_requirements():
+    dc_package = load_theme_package(
+        ROOT / "config/themes/datacenter_infra.yaml"
+    )
+    bio_package = load_theme_package(
+        ROOT / "config/themes/genomics_bio.yaml"
+    )
+    dc_record = _archive_for_real_package(dc_package)
+    bio_record = _archive_for_real_package(bio_package)
+
+    dc_order = build_research_work_order(
+        dc_record,
+        "DataCenter_Infra",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=dc_package,
+        target_tickers=(
+            _first_effective_ticker(dc_package),
+        ),
+    )
+    bio_order = build_research_work_order(
+        bio_record,
+        "Genomics_Bio",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=bio_package,
+        target_tickers=(
+            _first_effective_ticker(bio_package),
+        ),
+    )
+
+    assert dc_order.evidence_adapter == "industrials_infrastructure"
+    assert bio_order.evidence_adapter == "biotech_clinical"
+    assert (
+        dc_order.source_routing_intent
+        is RoutingIntent.ORDINARY_FULL_RESEARCH
+    )
+    assert (
+        bio_order.source_routing_intent
+        is RoutingIntent.ORDINARY_FULL_RESEARCH
+    )
+
+    dc_dimensions = {
+        item.dimension
+        for item in dc_order.requirements
+        if item.scope is ResearchRequirementScope.COMPANY_EVIDENCE
+    }
+    bio_dimensions = {
+        item.dimension
+        for item in bio_order.requirements
+        if item.scope is ResearchRequirementScope.COMPANY_EVIDENCE
+    }
+
+    assert "order_or_contract_visibility" in dc_dimensions
+    assert "clinical_phase" in bio_dimensions
+    assert "order_or_contract_visibility" not in bio_dimensions
+    assert "clinical_phase" not in dc_dimensions
+
+
+def test_research_execution_interfaces_are_publicly_importable():
+    import decision_lab
+
+    for name in (
+        "ResearchMode",
+        "ResearchAuthorization",
+        "ResearchRequirementScope",
+        "ResearchRequirement",
+        "ResearchTarget",
+        "ResearchWorkOrderPolicy",
+        "ResearchWorkOrder",
+        "ResearchEvidenceDirection",
+        "ResearchEvidenceInput",
+        "FrozenResearchEvidence",
+        "ResearchEvidenceBinding",
+        "CompanyResearchSubmission",
+        "NormalizedCompanyField",
+        "NormalizedCompanySnapshot",
+        "CompanyLinkageSubmission",
+        "HierarchicalLinkageSnapshot",
+        "CompanyLinkageStatus",
+        "CompanyResearchAssessment",
+        "ResearchFindingKind",
+        "ResearchFinding",
+        "ResearchExecutionClosure",
+        "ResearchDossierStatus",
+        "ResearchDossier",
+        "build_research_work_order",
+        "build_research_dossier",
+    ):
+        assert getattr(decision_lab, name) is not None
