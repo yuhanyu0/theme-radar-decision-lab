@@ -1272,3 +1272,314 @@ def _build_company_assessments(
             )
         )
     return tuple(rows)
+
+
+
+class ResearchDossierStatus(str, Enum):
+    NOT_STARTED = "NOT_STARTED"
+    PARTIAL = "PARTIAL"
+    COMPLETE = "COMPLETE"
+    BLOCKED_INSUFFICIENT_EVIDENCE = "BLOCKED_INSUFFICIENT_EVIDENCE"
+
+
+_DOSSIER_LIMITATIONS = (
+    "research completion means required coverage, not thesis correctness",
+    "allocation tier does not prove research execution without a dossier",
+    "provider retrieval and extraction occur outside this module",
+    "theme package exact historical bytes are not recoverable from ReplayCycleResult alone",
+    "research dossier does not grant trading permission",
+    "evidence payload content is committed by hash but not embedded in the dossier",
+)
+
+
+@dataclass(frozen=True)
+class ResearchDossier:
+    schema_version: str
+    work_order_hash: str
+    source_archive_record_hash: str
+    source_cycle_as_of: str
+    theme_id: str
+    research_mode: ResearchMode
+    evidence_as_of: str
+    closure: ResearchExecutionClosure
+    status: ResearchDossierStatus
+    evidence_bindings: tuple[ResearchEvidenceBinding, ...]
+    independent_source_count: int
+    satisfied_requirements: tuple[ResearchRequirement, ...]
+    unsatisfied_requirements: tuple[ResearchRequirement, ...]
+    company_assessments: tuple[CompanyResearchAssessment, ...]
+    findings: tuple[ResearchFinding, ...]
+    contradictions_present: bool
+    unresolved_present: bool
+    limitations: tuple[str, ...]
+    input_hash: str
+    dossier_hash: str
+
+
+def _linkage_input_payload(
+    submission: CompanyLinkageSubmission,
+) -> dict[str, object]:
+    ticker = submission.ticker.strip().upper()
+    simple = (
+        None
+        if submission.linkage is None
+        else asdict(
+            _validate_simple_linkage(
+                submission.linkage,
+                ticker,
+            )
+        )
+    )
+    hierarchical = (
+        None
+        if submission.hierarchical_linkage is None
+        else asdict(
+            _snapshot_hierarchical_linkage(
+                submission.hierarchical_linkage
+            )
+        )
+    )
+    return {
+        "ticker": ticker,
+        "linkage": simple,
+        "hierarchical_linkage": hierarchical,
+    }
+
+
+def _requirement_satisfied(
+    requirement: ResearchRequirement,
+    *,
+    bindings: tuple[ResearchEvidenceBinding, ...],
+    assessments: Mapping[str, CompanyResearchAssessment],
+) -> bool:
+    if requirement.scope is ResearchRequirementScope.THEME_EVIDENCE:
+        return any(
+            item.target_ticker is None
+            and requirement.dimension in item.dimensions
+            for item in bindings
+        )
+
+    assert requirement.target_ticker is not None
+    assessment = assessments[requirement.target_ticker]
+    if requirement.scope is ResearchRequirementScope.COMPANY_LINKAGE:
+        return (
+            assessment.linkage_status
+            is CompanyLinkageStatus.USABLE
+        )
+
+    binding_coverage = any(
+        item.target_ticker == requirement.target_ticker
+        and requirement.dimension in item.dimensions
+        for item in bindings
+    )
+    normalized_coverage = (
+        assessment.normalized_evidence is not None
+        and requirement.dimension in assessment.covered_dimensions
+    )
+    return binding_coverage and normalized_coverage
+
+
+def _derive_status(
+    *,
+    complete: bool,
+    closure: ResearchExecutionClosure,
+    evidence_bindings,
+    company_submissions,
+    linkage_submissions,
+    findings,
+) -> ResearchDossierStatus:
+    if complete:
+        return ResearchDossierStatus.COMPLETE
+    if closure is ResearchExecutionClosure.CLOSED:
+        return ResearchDossierStatus.BLOCKED_INSUFFICIENT_EVIDENCE
+    if not (
+        evidence_bindings
+        or company_submissions
+        or linkage_submissions
+        or findings
+    ):
+        return ResearchDossierStatus.NOT_STARTED
+    return ResearchDossierStatus.PARTIAL
+
+
+def _dossier_payload_without_hash(
+    dossier: ResearchDossier,
+) -> dict[str, object]:
+    payload = asdict(dossier)
+    payload.pop("dossier_hash")
+    return payload
+
+
+def build_research_dossier(
+    work_order: ResearchWorkOrder,
+    *,
+    evidence_as_of: str,
+    closure: ResearchExecutionClosure,
+    evidence_inputs: Sequence[ResearchEvidenceInput] = (),
+    company_submissions: Sequence[CompanyResearchSubmission] = (),
+    linkage_submissions: Sequence[CompanyLinkageSubmission] = (),
+    findings: Sequence[ResearchFinding] = (),
+) -> ResearchDossier:
+    _validate_work_order_hash(work_order)
+    if not isinstance(closure, ResearchExecutionClosure):
+        raise TypeError("unsupported research execution closure")
+    evidence_as_of_dt = _parse_utc(evidence_as_of)
+
+    bindings, originals = _freeze_evidence_inputs(
+        evidence_inputs,
+        order=work_order,
+        evidence_as_of=evidence_as_of_dt,
+    )
+    canonical_findings = _normalize_findings(
+        findings,
+        order=work_order,
+        evidence=originals,
+    )
+    company_snapshots = _normalize_company_submissions(
+        company_submissions,
+        order=work_order,
+        evidence=originals,
+        evidence_as_of=evidence_as_of_dt,
+    )
+    linkage_map = _normalize_linkage_submissions(
+        linkage_submissions,
+        order=work_order,
+    )
+    assessments = _build_company_assessments(
+        order=work_order,
+        bindings=bindings,
+        company_snapshots=company_snapshots,
+        linkage_map=linkage_map,
+    )
+    assessment_by_ticker = {
+        item.ticker: item for item in assessments
+    }
+
+    satisfied = tuple(
+        item
+        for item in work_order.requirements
+        if _requirement_satisfied(
+            item,
+            bindings=bindings,
+            assessments=assessment_by_ticker,
+        )
+    )
+    satisfied_set = set(satisfied)
+    unsatisfied = tuple(
+        item
+        for item in work_order.requirements
+        if item not in satisfied_set
+    )
+
+    independent_refs = {
+        item.evidence.source_ref
+        for item in bindings
+        if item.independent
+    }
+    company_complete = (
+        work_order.research_mode
+        is ResearchMode.THEME_REASSESSMENT
+        or all(
+            item.normalized_evidence is not None
+            and item.independent_source_count
+            >= work_order.minimum_independent_sources_per_company
+            for item in assessments
+        )
+    )
+    complete = (
+        not unsatisfied
+        and len(independent_refs)
+        >= work_order.minimum_independent_sources
+        and company_complete
+    )
+    status = _derive_status(
+        complete=complete,
+        closure=closure,
+        evidence_bindings=bindings,
+        company_submissions=company_submissions,
+        linkage_submissions=linkage_submissions,
+        findings=canonical_findings,
+    )
+    contradictions_present = any(
+        item.direction
+        is ResearchEvidenceDirection.CONTRADICTING
+        for item in bindings
+    ) or any(
+        item.kind is not ResearchFindingKind.UNRESOLVED
+        and item.direction
+        is ResearchEvidenceDirection.CONTRADICTING
+        for item in canonical_findings
+    )
+    unresolved_present = any(
+        item.kind is ResearchFindingKind.UNRESOLVED
+        for item in canonical_findings
+    )
+
+    canonical_evidence_as_of = evidence_as_of_dt.isoformat()
+    input_payload = {
+        "work_order_hash": work_order.work_order_hash,
+        "evidence_as_of": canonical_evidence_as_of,
+        "closure": closure,
+        "evidence_bindings": [
+            asdict(item) for item in bindings
+        ],
+        "company_submissions": [
+            {
+                "ticker": item.ticker.strip().upper(),
+                "as_of": _parse_utc(item.as_of).isoformat(),
+                "adapter_name": item.adapter_name,
+                "raw_facts": _canonical_raw_facts(
+                    item.raw_facts
+                ),
+                "evidence_source_hashes": sorted(
+                    item.evidence_source_hashes
+                ),
+            }
+            for item in sorted(
+                company_submissions,
+                key=lambda item: item.ticker.upper(),
+            )
+        ],
+        "linkage_submissions": [
+            _linkage_input_payload(item)
+            for item in sorted(
+                linkage_submissions,
+                key=lambda item: item.ticker.upper(),
+            )
+        ],
+        "findings": [
+            asdict(item) for item in canonical_findings
+        ],
+    }
+    input_hash = canonical_hash(input_payload)
+
+    seed = ResearchDossier(
+        schema_version=SCHEMA_VERSION,
+        work_order_hash=work_order.work_order_hash,
+        source_archive_record_hash=(
+            work_order.source_archive_record_hash
+        ),
+        source_cycle_as_of=work_order.source_cycle_as_of,
+        theme_id=work_order.theme_id,
+        research_mode=work_order.research_mode,
+        evidence_as_of=canonical_evidence_as_of,
+        closure=closure,
+        status=status,
+        evidence_bindings=bindings,
+        independent_source_count=len(independent_refs),
+        satisfied_requirements=satisfied,
+        unsatisfied_requirements=unsatisfied,
+        company_assessments=assessments,
+        findings=canonical_findings,
+        contradictions_present=contradictions_present,
+        unresolved_present=unresolved_present,
+        limitations=_DOSSIER_LIMITATIONS,
+        input_hash=input_hash,
+        dossier_hash="0" * 64,
+    )
+    return replace(
+        seed,
+        dossier_hash=canonical_hash(
+            _dossier_payload_without_hash(seed)
+        ),
+    )
