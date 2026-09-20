@@ -1148,3 +1148,131 @@ def test_replay_cohort_interfaces_are_publicly_importable():
         "evaluate_replay_cohort",
     ):
         assert getattr(decision_lab, name) is not None
+
+
+
+def test_non_forced_allocation_cannot_claim_forced_capacity_exhausted():
+    record = _registered_archive(
+        themes=("FullTheme",),
+        observations=(
+            _independent(
+                "FullTheme",
+                "support",
+                SupportDirection.SUPPORTING,
+            ),
+        ),
+    )
+    result = record.replay_result
+    allocation = replace(
+        result.allocations[0],
+        allocation_reasons=(
+            *result.allocations[0].allocation_reasons,
+            "forced review capacity exhausted",
+        ),
+    )
+    theme_record = replace(
+        result.theme_records[0],
+        allocation=allocation,
+    )
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            allocations=(allocation,),
+            theme_records=(theme_record,),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="unsupported forced-review allocation state",
+    ):
+        evaluate_replay_cohort((bad,), horizons=())
+
+
+def test_cycle_timestamp_mismatch_is_rejected():
+    record = _archive()
+    result = record.replay_result
+    scan = replace(
+        result.scan_results[0],
+        as_of="2026-09-18",
+    )
+    allocation = replace(
+        result.allocations[0],
+        source_scan_result_hash=canonical_hash(asdict(scan)),
+    )
+    theme_record = replace(
+        result.theme_records[0],
+        scan_result=scan,
+        allocation=allocation,
+    )
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            scan_results=(scan,),
+            allocations=(allocation,),
+            theme_records=(theme_record,),
+        )
+    )
+
+    with pytest.raises(ValueError, match="inconsistent replay theme record"):
+        evaluate_replay_cohort((bad,), horizons=(1,))
+
+
+def test_multiple_scanner_config_hashes_in_cycle_are_rejected():
+    record = _registered_archive(
+        themes=("ATheme", "BTheme"),
+        observations=(
+            _independent(
+                "ATheme",
+                "a",
+                SupportDirection.SUPPORTING,
+            ),
+            _independent(
+                "BTheme",
+                "b",
+                SupportDirection.SUPPORTING,
+            ),
+        ),
+    )
+    result = record.replay_result
+    scans = list(result.scan_results)
+    scans[1] = replace(scans[1], config_hash="different")
+    scan_by_theme = {item.theme_id: item for item in scans}
+    allocations = []
+    records = []
+    for allocation in result.allocations:
+        scan = scan_by_theme[allocation.theme_id]
+        changed_allocation = replace(
+            allocation,
+            source_scan_result_hash=canonical_hash(asdict(scan)),
+        )
+        allocations.append(changed_allocation)
+    allocation_by_theme = {
+        item.theme_id: item for item in allocations
+    }
+    for theme_record in result.theme_records:
+        if theme_record.replay_status is ReplayStatus.ROUTED:
+            records.append(
+                replace(
+                    theme_record,
+                    scan_result=scan_by_theme[theme_record.theme_id],
+                    allocation=allocation_by_theme[theme_record.theme_id],
+                )
+            )
+        else:
+            records.append(theme_record)
+
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            scan_results=tuple(scans),
+            allocations=tuple(allocations),
+            theme_records=tuple(records),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="multiple scanner config hashes in replay cycle",
+    ):
+        evaluate_replay_cohort((bad,), horizons=(1,))
