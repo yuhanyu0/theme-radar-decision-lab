@@ -432,6 +432,7 @@ Serialize ReplayArchiveRecord as UTF-8 JSON:
 - ensure_ascii=False;
 - sort_keys=True;
 - indent=2;
+- allow_nan=False;
 - trailing newline.
 
 Enums are serialized to their string values.
@@ -502,12 +503,16 @@ No generic dict-only return is used for the public reader.
 
 For each reconstructed dataclass:
 
-- required fields must exist;
+- the JSON object must contain exactly the field names of the v0.1 dataclass contract;
+- missing fields are invalid;
+- extra fields are invalid;
 - enum strings must map to valid enum values;
 - tuple/list fields must have the expected container type;
 - nested objects must be mappings;
 - unexpected structural types raise ValueError or TypeError;
 - numeric values are not silently coerced from arbitrary strings.
+
+Exact-field enforcement applies recursively to ReplayCycleResult, ReplayThemeRecord, MarketObservationBatch, MarketObservationDiagnostics, ThemeScanObservation, ThemeScanResult, and ResearchAllocation.
 
 The reader is not a permissive migration layer.
 
@@ -864,7 +869,15 @@ Any ledger/live destination:
 
 ## 48. Archive-root normalization
 
-Destination policy checks happen on normalized Path parts.
+Destination policy checks happen on resolved normalized path parts.
+
+Before any directory creation:
+
+    resolved_root = Path(archive_root).expanduser().resolve(strict=False)
+
+Use resolved_root.parts for all PUBLIC-root and ledger/live policy checks.
+
+This prevents a symlinked archive_root from bypassing the semantic destination policy.
 
 Do not rely on string substring tests such as:
 
@@ -872,7 +885,7 @@ Do not rely on string substring tests such as:
 
 because platform separators and unrelated names can produce false results.
 
-Use Path.parts and contiguous component matching.
+Use contiguous component matching over resolved Path.parts.
 
 ## 49. Concurrency semantics
 
@@ -913,6 +926,7 @@ Suggested private helpers:
     _recompute_replay_result_hash
     _archive_payload_without_hash
     _serialize_archive_record
+    _require_exact_fields
     _decode_support_direction
     _decode_theme_scan_observation
     _decode_market_diagnostic
@@ -1156,3 +1170,25 @@ while:
 - no mutable index exists;
 - no raw input data retention is added;
 - no downstream research/execution semantics change.
+
+
+## 64. Non-finite JSON rejection
+
+Archive serialization and verification must reject NaN and Infinity.
+
+Replay archives are intended to be portable standards-compliant JSON.
+
+Use allow_nan=False for pretty serialization and canonical_hash already rejects non-finite values.
+
+A manually-constructed ReplayCycleResult containing a non-finite numeric field must fail build/serialization rather than emit non-standard JSON.
+
+## 65. Symlink destination acceptance
+
+Add filesystem tests proving destination policy is applied after path resolution where symlinks are supported.
+
+At minimum:
+
+- a symlinked root resolving under ledger/live is rejected;
+- PUBLIC root symlinked to a non-recomputed destination is rejected.
+
+If the test platform does not support symlink creation, mark only those platform-specific tests skipped; the non-symlink policy tests remain mandatory.
