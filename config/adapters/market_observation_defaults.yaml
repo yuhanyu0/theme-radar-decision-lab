@@ -1,0 +1,12 @@
+version: "0.1"
+calibration_label: uncalibrated
+relative_strength_scale: 0.20
+novelty_scale: 0.10
+basket_support_excess_min: 0.02
+basket_support_breadth_min: 0.60
+basket_contradiction_excess_max: -0.02
+basket_contradiction_breadth_max: 0.25
+proxy_support_excess_min: 0.02
+proxy_support_persistence_min: 0.60
+proxy_contradiction_excess_max: -0.02
+proxy_contradiction_persistence_max: 0.40
