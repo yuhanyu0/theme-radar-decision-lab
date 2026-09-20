@@ -614,6 +614,9 @@ Rules:
 - target ticker must belong to work-order targets;
 - theme-level work may use target_ticker None only;
 - company deep dive may contain theme-level bindings and company-target bindings;
+- if EvidenceRecord.ticker is non-None and binding.target_ticker is non-None, they must be the same ticker;
+- theme-level evidence may support a company binding only when EvidenceRecord.ticker is None;
+- ticker-specific evidence for one valid target cannot be rebound to another valid target;
 - unrelated ticker/theme evidence is rejected.
 
 ## 37. Evidence scope validation
@@ -1880,3 +1883,16 @@ Linkage status may still reflect a submitted linkage diagnostic.
 This allows a PARTIAL dossier to preserve real linkage progress without fabricating normalized company evidence.
 
 COMPLETE still requires every target normalized_evidence is non-None.
+
+
+## 113. Exact company-binding target acceptance
+
+For a two-target work order containing AAA and BBB:
+
+- EvidenceRecord(ticker="BBB") bound with target_ticker="BBB" is valid;
+- the same EvidenceRecord bound with target_ticker="AAA" is rejected;
+- theme-level evidence with ticker=None may be bound to AAA or BBB when otherwise in scope.
+
+Required rejection:
+
+    ValueError("ticker-specific evidence does not match binding target")
