@@ -1031,10 +1031,11 @@ from decision_lab.evidence import EvidenceRecord
 from decision_lab.research_execution import (
     ResearchEvidenceDirection,
     ResearchEvidenceInput,
-    ResearchExecutionClosure,
     ResearchFinding,
     ResearchFindingKind,
-    build_research_dossier,
+    _freeze_evidence_inputs,
+    _normalize_findings,
+    _parse_utc,
 )
 ~~~
 
@@ -1094,11 +1095,8 @@ def test_stale_evidence_hash_is_rejected():
         ValueError,
         match="invalid research evidence hash",
     ):
-        build_research_dossier(
-            order,
-            evidence_as_of="2026-09-20T23:00:00+00:00",
-            closure=ResearchExecutionClosure.OPEN,
-            evidence_inputs=(
+        _freeze_evidence_inputs(
+            (
                 ResearchEvidenceInput(
                     evidence=evidence,
                     independent=True,
@@ -1106,6 +1104,10 @@ def test_stale_evidence_hash_is_rejected():
                     dimensions=("growth",),
                     target_ticker="AAA",
                 ),
+            ),
+            order=order,
+            evidence_as_of=_parse_utc(
+                "2026-09-20T23:00:00+00:00"
             ),
         )
 
@@ -1142,11 +1144,8 @@ def test_model_or_inferred_evidence_cannot_be_marked_independent(
         ValueError,
         match="model or inferred evidence cannot be marked independent",
     ):
-        build_research_dossier(
-            order,
-            evidence_as_of="2026-09-20T23:00:00+00:00",
-            closure=ResearchExecutionClosure.OPEN,
-            evidence_inputs=(
+        _freeze_evidence_inputs(
+            (
                 ResearchEvidenceInput(
                     evidence=evidence,
                     independent=True,
@@ -1154,6 +1153,10 @@ def test_model_or_inferred_evidence_cannot_be_marked_independent(
                     dimensions=("growth",),
                     target_ticker="AAA",
                 ),
+            ),
+            order=order,
+            evidence_as_of=_parse_utc(
+                "2026-09-20T23:00:00+00:00"
             ),
         )
 
@@ -1180,11 +1183,8 @@ def test_future_evidence_is_rejected():
         ValueError,
         match="research evidence exceeds evidence_as_of",
     ):
-        build_research_dossier(
-            order,
-            evidence_as_of="2026-09-20T23:00:00+00:00",
-            closure=ResearchExecutionClosure.OPEN,
-            evidence_inputs=(
+        _freeze_evidence_inputs(
+            (
                 ResearchEvidenceInput(
                     evidence=evidence,
                     independent=True,
@@ -1192,6 +1192,10 @@ def test_future_evidence_is_rejected():
                     dimensions=("growth",),
                     target_ticker="AAA",
                 ),
+            ),
+            order=order,
+            evidence_as_of=_parse_utc(
+                "2026-09-20T23:00:00+00:00"
             ),
         )
 
@@ -1213,11 +1217,8 @@ def test_cross_company_evidence_is_rejected():
     )
 
     with pytest.raises(ValueError):
-        build_research_dossier(
-            order,
-            evidence_as_of="2026-09-20T23:00:00+00:00",
-            closure=ResearchExecutionClosure.OPEN,
-            evidence_inputs=(
+        _freeze_evidence_inputs(
+            (
                 ResearchEvidenceInput(
                     evidence=evidence,
                     independent=True,
@@ -1226,12 +1227,11 @@ def test_cross_company_evidence_is_rejected():
                     target_ticker="AAA",
                 ),
             ),
+            order=order,
+            evidence_as_of=_parse_utc("2026-09-20"),
         )
-~~~
 
-- [ ] **Step 2: Add RED immutable evidence/finding tests**
 
-~~~python
 def test_evidence_payload_is_frozen_by_snapshot():
     record, package = _registered_archive()
     order = build_research_work_order(
@@ -1247,11 +1247,8 @@ def test_evidence_payload_is_frozen_by_snapshot():
         ticker="AAA",
         payload={"growth": 0.2},
     )
-    dossier = build_research_dossier(
-        order,
-        evidence_as_of="2026-09-20T23:00:00+00:00",
-        closure=ResearchExecutionClosure.OPEN,
-        evidence_inputs=(
+    bindings, _ = _freeze_evidence_inputs(
+        (
             ResearchEvidenceInput(
                 evidence=evidence,
                 independent=True,
@@ -1260,12 +1257,14 @@ def test_evidence_payload_is_frozen_by_snapshot():
                 target_ticker="AAA",
             ),
         ),
+        order=order,
+        evidence_as_of=_parse_utc("2026-09-20"),
     )
-    before = dossier
+    before = bindings
     evidence.payload["growth"] = 99.0
 
-    assert dossier == before
-    assert dossier.evidence_bindings[0].evidence.payload_hash == canonical_hash(
+    assert bindings == before
+    assert bindings[0].evidence.payload_hash == canonical_hash(
         {"growth": 0.2}
     )
 
@@ -1285,31 +1284,36 @@ def test_observed_synthesis_cannot_cite_non_observed_evidence():
         source_type="radar_model_output",
         is_observed_fact=False,
     )
-    finding = ResearchFinding(
-        finding_id="f1",
-        kind=ResearchFindingKind.OBSERVED_SYNTHESIS,
-        direction=ResearchEvidenceDirection.CONTRADICTING,
-        dimension="theme_structure",
-        target_ticker=None,
-        statement="Structure is weak.",
-        evidence_source_hashes=(model.source_hash,),
+    bindings, originals = _freeze_evidence_inputs(
+        (
+            ResearchEvidenceInput(
+                evidence=model,
+                independent=False,
+                direction=ResearchEvidenceDirection.CONTRADICTING,
+                dimensions=("theme_structure",),
+                target_ticker=None,
+            ),
+        ),
+        order=order,
+        evidence_as_of=_parse_utc("2026-09-20"),
     )
+    assert bindings
 
     with pytest.raises(ValueError):
-        build_research_dossier(
-            order,
-            evidence_as_of="2026-09-20T23:00:00+00:00",
-            closure=ResearchExecutionClosure.OPEN,
-            evidence_inputs=(
-                ResearchEvidenceInput(
-                    evidence=model,
-                    independent=False,
+        _normalize_findings(
+            (
+                ResearchFinding(
+                    finding_id="f1",
+                    kind=ResearchFindingKind.OBSERVED_SYNTHESIS,
                     direction=ResearchEvidenceDirection.CONTRADICTING,
-                    dimensions=("theme_structure",),
+                    dimension="theme_structure",
                     target_ticker=None,
+                    statement="Structure is weak.",
+                    evidence_source_hashes=(model.source_hash,),
                 ),
             ),
-            findings=(finding,),
+            order=order,
+            evidence=originals,
         )
 
 
@@ -1320,12 +1324,8 @@ def test_unresolved_finding_can_be_evidence_free_but_has_no_direction():
         "UnknownRisk",
         ResearchMode.THEME_REASSESSMENT,
     )
-
-    dossier = build_research_dossier(
-        order,
-        evidence_as_of="2026-09-20T23:00:00+00:00",
-        closure=ResearchExecutionClosure.OPEN,
-        findings=(
+    findings = _normalize_findings(
+        (
             ResearchFinding(
                 finding_id="open-question",
                 kind=ResearchFindingKind.UNRESOLVED,
@@ -1336,9 +1336,12 @@ def test_unresolved_finding_can_be_evidence_free_but_has_no_direction():
                 evidence_source_hashes=(),
             ),
         ),
+        order=order,
+        evidence={},
     )
 
-    assert dossier.unresolved_present
+    assert findings[0].kind is ResearchFindingKind.UNRESOLVED
+    assert findings[0].direction is None
 ~~~
 
 - [ ] **Step 3: Run Task-2 tests and verify RED**
@@ -1647,7 +1650,7 @@ pytest -q tests/test_research_execution.py
 pytest -q
 ~~~
 
-Expected: evidence validation/freeze tests pass; dossier may still be a minimal shell until Task 4.
+Expected: all evidence/finding helper tests pass without any ResearchDossier implementation.
 
 - [ ] **Step 7: Commit**
 
@@ -1689,6 +1692,10 @@ from decision_lab.research_execution import (
     CompanyLinkageSubmission,
     CompanyLinkageStatus,
     CompanyResearchSubmission,
+    _build_company_assessments,
+    _linkage_status,
+    _normalize_company_submissions,
+    _normalize_linkage_submissions,
 )
 ~~~
 
@@ -1706,6 +1713,22 @@ def _company_order(adapter="industrials_infrastructure"):
     )
 
 
+def _one_company_binding(order, evidence, dimensions):
+    return _freeze_evidence_inputs(
+        (
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=ResearchEvidenceDirection.SUPPORTING,
+                dimensions=dimensions,
+                target_ticker="AAA",
+            ),
+        ),
+        order=order,
+        evidence_as_of=_parse_utc("2026-09-20"),
+    )
+
+
 def test_company_raw_fact_requires_same_ticker_evidence():
     order = _company_order()
     theme_evidence = _evidence(
@@ -1714,25 +1737,18 @@ def test_company_raw_fact_requires_same_ticker_evidence():
         ticker=None,
         payload={"revenue_growth": 0.2},
     )
+    _, originals = _one_company_binding(
+        order,
+        theme_evidence,
+        ("growth",),
+    )
 
     with pytest.raises(
         ValueError,
         match="company raw fact is unsupported by cited evidence",
     ):
-        build_research_dossier(
-            order,
-            evidence_as_of="2026-09-20T23:00:00+00:00",
-            closure=ResearchExecutionClosure.OPEN,
-            evidence_inputs=(
-                ResearchEvidenceInput(
-                    evidence=theme_evidence,
-                    independent=True,
-                    direction=ResearchEvidenceDirection.SUPPORTING,
-                    dimensions=("growth",),
-                    target_ticker="AAA",
-                ),
-            ),
-            company_submissions=(
+        _normalize_company_submissions(
+            (
                 CompanyResearchSubmission(
                     ticker="AAA",
                     as_of="2026-09-20",
@@ -1741,6 +1757,9 @@ def test_company_raw_fact_requires_same_ticker_evidence():
                     evidence_source_hashes=(theme_evidence.source_hash,),
                 ),
             ),
+            order=order,
+            evidence=originals,
+            evidence_as_of=_parse_utc("2026-09-20"),
         )
 
 
@@ -1752,25 +1771,14 @@ def test_type_sensitive_raw_fact_support_rejects_bool_for_one():
         ticker="AAA",
         payload={"revenue_growth": True},
     )
+    _, originals = _one_company_binding(order, evidence, ("growth",))
 
     with pytest.raises(
         ValueError,
         match="company raw fact is unsupported by cited evidence",
     ):
-        build_research_dossier(
-            order,
-            evidence_as_of="2026-09-20T23:00:00+00:00",
-            closure=ResearchExecutionClosure.OPEN,
-            evidence_inputs=(
-                ResearchEvidenceInput(
-                    evidence=evidence,
-                    independent=True,
-                    direction=ResearchEvidenceDirection.SUPPORTING,
-                    dimensions=("growth",),
-                    target_ticker="AAA",
-                ),
-            ),
-            company_submissions=(
+        _normalize_company_submissions(
+            (
                 CompanyResearchSubmission(
                     ticker="AAA",
                     as_of="2026-09-20",
@@ -1779,10 +1787,13 @@ def test_type_sensitive_raw_fact_support_rejects_bool_for_one():
                     evidence_source_hashes=(evidence.source_hash,),
                 ),
             ),
+            order=order,
+            evidence=originals,
+            evidence_as_of=_parse_utc("2026-09-20"),
         )
 
 
-def test_declared_company_dimension_does_not_cover_missing_normalized_field():
+def test_declared_company_dimension_does_not_create_missing_normalized_field():
     order = _company_order()
     evidence = _evidence(
         evidence_id="aaa",
@@ -1790,20 +1801,9 @@ def test_declared_company_dimension_does_not_cover_missing_normalized_field():
         ticker="AAA",
         payload={"unrelated": 1},
     )
-    dossier = build_research_dossier(
-        order,
-        evidence_as_of="2026-09-20T23:00:00+00:00",
-        closure=ResearchExecutionClosure.OPEN,
-        evidence_inputs=(
-            ResearchEvidenceInput(
-                evidence=evidence,
-                independent=True,
-                direction=ResearchEvidenceDirection.SUPPORTING,
-                dimensions=("growth",),
-                target_ticker="AAA",
-            ),
-        ),
-        company_submissions=(
+    _, originals = _one_company_binding(order, evidence, ("growth",))
+    snapshots = _normalize_company_submissions(
+        (
             CompanyResearchSubmission(
                 ticker="AAA",
                 as_of="2026-09-20",
@@ -1812,17 +1812,16 @@ def test_declared_company_dimension_does_not_cover_missing_normalized_field():
                 evidence_source_hashes=(evidence.source_hash,),
             ),
         ),
+        order=order,
+        evidence=originals,
+        evidence_as_of=_parse_utc("2026-09-20"),
     )
 
-    assert any(
-        item.dimension == "growth"
-        for item in dossier.unsatisfied_requirements
-    )
-~~~
+    assert "growth" not in {
+        item.name for item in snapshots["AAA"].fields
+    }
 
-- [ ] **Step 2: Add RED DataCenter/Genomics adapter snapshot tests**
 
-~~~python
 def test_industrials_adapter_snapshot_preserves_domain_fields():
     order = _company_order("industrials_infrastructure")
     evidence = _evidence(
@@ -1835,20 +1834,13 @@ def test_industrials_adapter_snapshot_preserves_domain_fields():
             "backlog_growth": 0.4,
         },
     )
-    dossier = build_research_dossier(
+    _, originals = _one_company_binding(
         order,
-        evidence_as_of="2026-09-20T23:00:00+00:00",
-        closure=ResearchExecutionClosure.OPEN,
-        evidence_inputs=(
-            ResearchEvidenceInput(
-                evidence=evidence,
-                independent=True,
-                direction=ResearchEvidenceDirection.SUPPORTING,
-                dimensions=("growth", "margin_quality", "demand_visibility"),
-                target_ticker="AAA",
-            ),
-        ),
-        company_submissions=(
+        evidence,
+        ("growth", "margin_quality", "demand_visibility"),
+    )
+    snapshots = _normalize_company_submissions(
+        (
             CompanyResearchSubmission(
                 ticker="AAA",
                 as_of="2026-09-20",
@@ -1857,10 +1849,12 @@ def test_industrials_adapter_snapshot_preserves_domain_fields():
                 evidence_source_hashes=(evidence.source_hash,),
             ),
         ),
+        order=order,
+        evidence=originals,
+        evidence_as_of=_parse_utc("2026-09-20"),
     )
     fields_by_name = {
-        item.name: item.value
-        for item in dossier.company_assessments[0].normalized_evidence.fields
+        item.name: item.value for item in snapshots["AAA"].fields
     }
     assert fields_by_name["growth"] is not None
     assert fields_by_name["margin_quality"] is not None
@@ -1883,28 +1877,21 @@ def test_biotech_adapter_snapshot_preserves_clinical_fields():
             "partnered_economics": 0.7,
         },
     )
-    dossier = build_research_dossier(
+    _, originals = _one_company_binding(
         order,
-        evidence_as_of="2026-09-20T23:00:00+00:00",
-        closure=ResearchExecutionClosure.OPEN,
-        evidence_inputs=(
-            ResearchEvidenceInput(
-                evidence=evidence,
-                independent=True,
-                direction=ResearchEvidenceDirection.SUPPORTING,
-                dimensions=(
-                    "clinical_phase",
-                    "endpoint_status",
-                    "regulatory_state",
-                    "cash_runway_months",
-                    "days_to_material_catalyst",
-                    "platform_validation",
-                    "partnered_economics",
-                ),
-                target_ticker="AAA",
-            ),
+        evidence,
+        (
+            "clinical_phase",
+            "endpoint_status",
+            "regulatory_state",
+            "cash_runway_months",
+            "days_to_material_catalyst",
+            "platform_validation",
+            "partnered_economics",
         ),
-        company_submissions=(
+    )
+    snapshots = _normalize_company_submissions(
+        (
             CompanyResearchSubmission(
                 ticker="AAA",
                 as_of="2026-09-20",
@@ -1913,18 +1900,17 @@ def test_biotech_adapter_snapshot_preserves_clinical_fields():
                 evidence_source_hashes=(evidence.source_hash,),
             ),
         ),
+        order=order,
+        evidence=originals,
+        evidence_as_of=_parse_utc("2026-09-20"),
     )
     fields_by_name = {
-        item.name: item.value
-        for item in dossier.company_assessments[0].normalized_evidence.fields
+        item.name: item.value for item in snapshots["AAA"].fields
     }
     assert fields_by_name["clinical_phase"] == "Phase 2"
     assert fields_by_name["cash_runway_months"] == 24
-~~~
 
-- [ ] **Step 3: Add RED linkage status/snapshot mutation tests**
 
-~~~python
 def _usable_linkage():
     return LinkageResult(
         ticker="AAA",
@@ -1942,25 +1928,23 @@ def _usable_linkage():
     )
 
 
-def test_circular_linkage_does_not_satisfy_linkage_requirement():
+def test_circular_linkage_status_is_not_usable():
     order = _company_order()
     linkage = replace(_usable_linkage(), circularity_warning=True)
-    dossier = build_research_dossier(
-        order,
-        evidence_as_of="2026-09-20T23:00:00+00:00",
-        closure=ResearchExecutionClosure.OPEN,
-        linkage_submissions=(
+    linkage_map = _normalize_linkage_submissions(
+        (
             CompanyLinkageSubmission(
                 ticker="AAA",
                 linkage=linkage,
             ),
         ),
+        order=order,
     )
-    assessment = dossier.company_assessments[0]
-    assert assessment.linkage_status is CompanyLinkageStatus.CIRCULARITY_WARNING
-    assert any(
-        item.scope is ResearchRequirementScope.COMPANY_LINKAGE
-        for item in dossier.unsatisfied_requirements
+    simple, hierarchical = linkage_map["AAA"]
+
+    assert (
+        _linkage_status(simple, hierarchical)
+        is CompanyLinkageStatus.CIRCULARITY_WARNING
     )
 
 
@@ -1982,22 +1966,18 @@ def test_hierarchical_coefficients_are_frozen():
         missing_controls=(),
         coefficients=coefficients,
     )
-    dossier = build_research_dossier(
-        order,
-        evidence_as_of="2026-09-20T23:00:00+00:00",
-        closure=ResearchExecutionClosure.OPEN,
-        linkage_submissions=(
+    linkage_map = _normalize_linkage_submissions(
+        (
             CompanyLinkageSubmission(
                 ticker="AAA",
                 hierarchical_linkage=hierarchical,
             ),
         ),
+        order=order,
     )
-    snapshot = dossier.company_assessments[0].hierarchical_linkage
-    before = dossier
+    snapshot = linkage_map["AAA"][1]
     coefficients["SPY"] = 99.0
 
-    assert dossier == before
     assert snapshot.coefficients == (
         ("SPY", 0.4),
         ("WorkTheme", 0.6),
@@ -2332,9 +2312,51 @@ def _linkage_status(
     return CompanyLinkageStatus.COVERAGE_PENDING
 ~~~
 
-Implement _normalize_linkage_submissions as a deterministic one-per-target map, validating at least one linkage object, ticker matching, and converting hierarchical inputs to snapshots.
+Add:
 
-Task 4 consumes the resulting maps to build assessments.
+~~~python
+def _normalize_linkage_submissions(
+    submissions: Sequence[CompanyLinkageSubmission],
+    *,
+    order: ResearchWorkOrder,
+) -> dict[
+    str,
+    tuple[LinkageResult | None, HierarchicalLinkageSnapshot | None],
+]:
+    targets = {target.ticker for target in order.targets}
+    output = {}
+    for submission in submissions:
+        ticker = submission.ticker.strip().upper()
+        if ticker not in targets:
+            raise ValueError("linkage target outside work order")
+        if ticker in output:
+            raise ValueError("duplicate company linkage submission")
+        if (
+            submission.linkage is None
+            and submission.hierarchical_linkage is None
+        ):
+            raise ValueError("linkage submission is empty")
+
+        simple = (
+            None
+            if submission.linkage is None
+            else _validate_simple_linkage(
+                submission.linkage,
+                ticker,
+            )
+        )
+        hierarchical = None
+        if submission.hierarchical_linkage is not None:
+            if submission.hierarchical_linkage.target.upper() != ticker:
+                raise ValueError("linkage ticker mismatch")
+            hierarchical = _snapshot_hierarchical_linkage(
+                submission.hierarchical_linkage
+            )
+        output[ticker] = (simple, hierarchical)
+    return output
+~~~
+
+Task 4 consumes this deterministic map to build company assessments.
 
 - [ ] **Step 9: Run Task-3 tests and full regression**
 
@@ -2345,7 +2367,7 @@ pytest -q tests/test_research_execution.py
 pytest -q
 ~~~
 
-Expected: PASS for company/linkage-focused tests.
+Expected: all company-normalization and linkage-snapshot helper tests PASS without any ResearchDossier implementation.
 
 - [ ] **Step 10: Commit**
 
