@@ -753,7 +753,7 @@ Rules:
 - ticker must be a work-order target;
 - one submission per target;
 - adapter_name must equal work_order.evidence_adapter;
-- evidence_source_hashes unique and lexical;
+- evidence_source_hashes must be unique; caller order is accepted and canonicalized lexically by the builder;
 - every referenced hash must exist in dossier evidence;
 - every referenced evidence record must be bound to the same ticker or the work-order theme;
 - evidence cited as raw-fact support must be ticker-specific to the submission ticker.
@@ -843,9 +843,13 @@ normalized_payload_hash commits to the complete asdict(normalized_evidence), inc
 
 CompanyResearchSubmission.as_of must be <= evidence_as_of.
 
-It must not precede the source cycle date.
+It must not precede the source cycle instant.
 
-If outside that half-open execution interval:
+The allowed execution interval is closed:
+
+    source_cycle <= company_as_of <= evidence_as_of
+
+If outside that interval:
 
     raise ValueError("company research as_of is outside execution window")
 
@@ -1015,11 +1019,12 @@ A finding kind never changes EvidenceRecord.is_observed_fact.
 
 ## 57. Finding scope
 
-If a finding has target_ticker:
+If a finding has target_ticker, cited evidence may be:
 
-- every cited ticker-specific evidence record must either match that ticker or be theme-level evidence.
+- theme-level evidence for the work-order theme;
+- ticker-specific evidence for that same target ticker.
 
-A company finding cannot cite evidence bound to another target company.
+It must not cite ticker-specific evidence for another target company.
 
 ## 58. ResearchExecutionClosure
 
