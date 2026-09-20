@@ -277,11 +277,36 @@ def _validate_replay_semantics(result: ReplayCycleResult) -> None:
         elif item.market_batch is not None:
             raise ValueError("inconsistent replay theme record")
 
+    observations_by_theme: dict[str, list[object]] = {}
     for observation in result.combined_observations:
         if observation.theme_id not in records:
             raise ValueError("observation theme missing from replay records")
+        observations_by_theme.setdefault(
+            observation.theme_id,
+            [],
+        ).append(observation)
 
     for item in result.theme_records:
+        current_observations = observations_by_theme.get(item.theme_id, [])
+        if (
+            item.replay_status is ReplayStatus.NO_OBSERVATION
+            and current_observations
+        ):
+            raise ValueError("inconsistent replay theme record")
+        if (
+            item.replay_status is ReplayStatus.ROUTED
+            and not current_observations
+        ):
+            raise ValueError("inconsistent replay theme record")
+
+        if item.market_batch is not None:
+            for observation in item.market_batch.observations:
+                if (
+                    observation.theme_id != item.theme_id
+                    or observation not in current_observations
+                ):
+                    raise ValueError("inconsistent replay theme record")
+
         _routing_intent(item)
         _independent_evidence_state(result, item.theme_id)
 
@@ -365,15 +390,26 @@ def _routing_intent(item: ReplayThemeRecord) -> RoutingIntent:
         "forced review capacity exhausted"
         in allocation.allocation_reasons
     )
+    theme_not_registered = (
+        "theme not registered"
+        in allocation.allocation_reasons
+    )
+
+    if not item.registered:
+        if (
+            allocation.tier is not ResearchTier.SCAN_ONLY
+            or not theme_not_registered
+            or exhausted
+        ):
+            raise ValueError("unsupported unregistered allocation state")
+        if scan.forced_review:
+            return RoutingIntent.FORCED_REVIEW_UNREGISTERED
+        return RoutingIntent.SCAN_ONLY
+
+    if theme_not_registered:
+        raise ValueError("unsupported forced-review allocation state")
 
     if scan.forced_review:
-        if (
-            not item.registered
-            and allocation.tier is ResearchTier.SCAN_ONLY
-            and "theme not registered" in allocation.allocation_reasons
-            and not exhausted
-        ):
-            return RoutingIntent.FORCED_REVIEW_UNREGISTERED
         if (
             allocation.tier is ResearchTier.FULL_DECISION_RESEARCH
             and not exhausted
