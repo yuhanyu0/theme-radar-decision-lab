@@ -1072,7 +1072,7 @@ def _validate_destination_policy(
         )
 
     if destination_visibility is ArchiveDestinationVisibility.PUBLIC:
-        if not public_safe:
+        if public_safe is not True:
             raise PermissionError(
                 "public archive write requires explicit public_safe=True"
             )
@@ -1118,12 +1118,21 @@ def write_replay_archive(
     requested_payload = _record_payload(record)
     requested_bytes = _serialize_archive_record(record)
 
+    expected_cycle_dir = resolved_root / path.parent.name
+    if path.parent.exists() or path.parent.is_symlink():
+        if path.parent.resolve(strict=False) != expected_cycle_dir:
+            raise ValueError("archive cycle directory escapes archive root")
+
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.parent.resolve(strict=False) != expected_cycle_dir:
+        raise ValueError("archive cycle directory escapes archive root")
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     try:
         fd = os.open(path, flags, 0o644)
     except FileExistsError:
+        if path.is_symlink():
+            raise FileExistsError("archive path conflict") from None
         try:
             existing = read_replay_archive(path)
         except (
