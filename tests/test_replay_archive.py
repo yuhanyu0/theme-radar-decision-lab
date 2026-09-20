@@ -6,7 +6,20 @@ from pathlib import Path
 import pytest
 
 from decision_lab.ledger import canonical_hash
-from decision_lab.replay import ReplayCycleInput, ReplayStatus, run_replay_cycle
+from decision_lab.market_observation import (
+    MarketBar,
+    MarketObservationConfig,
+    MarketObservationMode,
+    MarketObservationSpec,
+    load_market_observation_config,
+    load_market_observation_spec,
+)
+from decision_lab.replay import (
+    ReplayCycleInput,
+    ReplayStatus,
+    ThemeReplayInput,
+    run_replay_cycle,
+)
 from decision_lab.replay_archive import (
     ArchiveDestinationVisibility,
     ReplayArchiveRecord,
@@ -19,6 +32,14 @@ from decision_lab.replay_archive import (
 )
 from decision_lab.research_budget import ResearchBudgetConfig, ResearchTier
 from decision_lab.scanner import ScannerConfig, SupportDirection, ThemeScanObservation
+from decision_lab.themes import (
+    ThemeDefinition,
+    ThemeKeyPolicy,
+    ThemeLifecycleState,
+    ThemePackage,
+    load_theme_package,
+)
+from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
 
 def _radar(theme="Rates", *, discovery=0.8):
@@ -518,3 +539,387 @@ def test_public_symlink_to_noncanonical_destination_is_rejected(tmp_path):
             destination_visibility=ArchiveDestinationVisibility.PUBLIC,
             public_safe=True,
         )
+
+
+
+def test_partial_new_file_is_removed_after_write_failure(tmp_path, monkeypatch):
+    record = build_replay_archive_record(_sample_replay_result())
+    root = tmp_path / "private"
+
+    class BrokenWriter:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def write(self, data):
+            raise OSError("simulated write failure")
+
+    real_fdopen = os.fdopen
+
+    def broken_fdopen(fd, mode):
+        os.close(fd)
+        return BrokenWriter()
+
+    monkeypatch.setattr(os, "fdopen", broken_fdopen)
+
+    with pytest.raises(OSError, match="simulated write failure"):
+        write_replay_archive(
+            record,
+            root,
+            destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+        )
+
+    path = replay_archive_path(record, root.resolve(strict=False))
+    assert not path.exists()
+
+    monkeypatch.setattr(os, "fdopen", real_fdopen)
+
+
+def _market_replay_result():
+    universe = ThemeUniverse(
+        theme="ArchiveTheme",
+        version="u1",
+        generated_at="2026-09-19T00:00:00Z",
+    )
+    universe.add_layer(ThemeLayer("layer"))
+    universe.add_candidate(
+        Candidate(
+            ticker="AAA",
+            theme="ArchiveTheme",
+            layer="layer",
+            effective_from="2026-01-01",
+        )
+    )
+    package = ThemePackage(
+        definition=ThemeDefinition(
+            theme_id="ArchiveTheme",
+            display_name="Archive Theme",
+            lifecycle_state=ThemeLifecycleState.STRENGTHENING,
+            effective_from="2026-01-01",
+            version="1",
+        ),
+        universe=universe,
+        theme_key_policy=ThemeKeyPolicy(),
+        evidence_adapter="generic",
+        version="p1",
+        source_path="fixture",
+    )
+    spec = MarketObservationSpec(
+        theme_id="ArchiveTheme",
+        mode=MarketObservationMode.BASKET,
+        benchmark="SPY",
+        current_return_sessions=1,
+        prior_return_sessions=1,
+        min_basket_members=1,
+        version="test",
+    )
+    bars = tuple(
+        MarketBar(
+            symbol=symbol,
+            session_date=session,
+            available_at=f"{session}T21:00:00+00:00",
+            close=close,
+        )
+        for symbol, closes in (
+            ("SPY", (100, 100, 100)),
+            ("AAA", (100, 100, 103)),
+        )
+        for session, close in zip(
+            ("2026-09-17", "2026-09-18", "2026-09-19"),
+            closes,
+            strict=True,
+        )
+    )
+    return run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(
+                ThemeReplayInput(
+                    package=package,
+                    market_spec=spec,
+                    market_config=MarketObservationConfig(),
+                    bars=bars,
+                    market_source_ref="fixture:archive-market",
+                ),
+            ),
+            external_observations=(),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+
+
+def test_nested_market_diagnostic_tamper_is_detected(tmp_path):
+    record = build_replay_archive_record(_market_replay_result())
+    payload = _record_payload(record)
+    payload["replay_result"]["market_batches"][0]["diagnostics"][0][
+        "current_excess_return"
+    ] = 0.99
+    path = (
+        tmp_path
+        / "2026-09-19"
+        / f"{record.replay_result_hash}.json"
+    )
+    _write_payload(path, payload)
+
+    assert not verify_replay_archive(path)
+    with pytest.raises(ValueError):
+        read_replay_archive(path)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    [
+        ("schema_version", "9.9"),
+        ("content_type", "other"),
+        ("producer", "other-producer"),
+    ],
+)
+def test_reader_rejects_unsupported_archive_contract(
+    tmp_path,
+    field_name,
+    bad_value,
+):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload[field_name] = bad_value
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    assert not verify_replay_archive(path)
+    with pytest.raises(ValueError):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_non_object_top_level_json(tmp_path):
+    path = tmp_path / "2026-09-19" / f"{'0' * 64}.json"
+    _write_payload(path, ["not", "an", "object"])
+
+    assert not verify_replay_archive(path)
+    with pytest.raises(TypeError, match="archive must be a JSON object"):
+        read_replay_archive(path)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+REPLAY_SESSIONS = (
+    "2026-09-03",
+    "2026-09-04",
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11",
+    "2026-09-14",
+    "2026-09-15",
+    "2026-09-16",
+    "2026-09-17",
+    "2026-09-18",
+)
+
+
+def _series(symbol, closes):
+    return tuple(
+        MarketBar(
+            symbol=symbol,
+            session_date=session,
+            available_at=f"{session}T21:00:00+00:00",
+            close=close,
+        )
+        for session, close in zip(REPLAY_SESSIONS, closes, strict=True)
+    )
+
+
+def _full_replay_result():
+    market_config = load_market_observation_config(
+        ROOT / "config/adapters/market_observation_defaults.yaml"
+    )
+    dc_package = load_theme_package(
+        ROOT / "config/themes/datacenter_infra.yaml"
+    )
+    bio_package = load_theme_package(
+        ROOT / "config/themes/genomics_bio.yaml"
+    )
+    dc_spec = load_market_observation_spec(
+        ROOT / "config/market_observations/datacenter_infra.yaml"
+    )
+    bio_spec = load_market_observation_spec(
+        ROOT / "config/market_observations/genomics_bio.yaml"
+    )
+
+    dc_bars = (
+        _series("SPY", [100] * 11)
+        + _series(
+            "BE",
+            [100, 102, 104, 106, 108, 110, 106, 102, 98, 94, 90],
+        )
+        + _series(
+            "NRG",
+            [100, 101, 102, 103, 104, 105, 102, 99, 96, 93, 90],
+        )
+        + _series(
+            "CEG",
+            [100, 102, 103, 105, 106, 108, 106, 103, 100, 98, 95],
+        )
+    )
+    bio_bars = (
+        _series("SPY", [100] * 11)
+        + _series(
+            "ARKG",
+            [100, 99, 98, 97, 96, 95, 100, 105, 110, 115, 120],
+        )
+        + _series(
+            "XBI",
+            [100, 99, 98, 97, 96, 96, 96.2, 96.4, 96.6, 96.8, 97.0],
+        )
+    )
+
+    quiet_universe = ThemeUniverse(
+        theme="QuietTheme",
+        version="u1",
+        generated_at="2026-09-19T00:00:00Z",
+    )
+    quiet_universe.add_layer(ThemeLayer("layer"))
+    quiet_package = ThemePackage(
+        definition=ThemeDefinition(
+            theme_id="QuietTheme",
+            display_name="Quiet Theme",
+            lifecycle_state=ThemeLifecycleState.STRENGTHENING,
+            effective_from="2026-01-01",
+            version="1",
+        ),
+        universe=quiet_universe,
+        theme_key_policy=ThemeKeyPolicy(),
+        evidence_adapter="generic",
+        version="p1",
+        source_path="fixture",
+    )
+    quiet_spec = MarketObservationSpec(
+        theme_id="QuietTheme",
+        mode=MarketObservationMode.BASKET,
+        benchmark="SPY",
+        current_return_sessions=1,
+        prior_return_sessions=1,
+        min_basket_members=1,
+        version="test",
+    )
+
+    def radar(theme, discovery, novelty):
+        return ThemeScanObservation(
+            theme_id=theme,
+            as_of="2026-09-19",
+            source_type="radar_model_output",
+            source_ref=f"radar:{theme}:2026-09-19",
+            discovery_signal=discovery,
+            novelty_signal=novelty,
+            support_direction=SupportDirection.SUPPORTING,
+            evidence_refs=(f"radar:{theme}",),
+            is_independent=False,
+            observed_or_inferred="inferred",
+        )
+
+    return run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(
+                ThemeReplayInput(
+                    package=dc_package,
+                    market_spec=dc_spec,
+                    market_config=market_config,
+                    bars=dc_bars,
+                    market_source_ref="fixture:archive:datacenter",
+                ),
+                ThemeReplayInput(
+                    package=bio_package,
+                    market_spec=bio_spec,
+                    market_config=market_config,
+                    bars=bio_bars,
+                    market_source_ref="fixture:archive:genomics",
+                ),
+                ThemeReplayInput(
+                    package=quiet_package,
+                    market_spec=quiet_spec,
+                    market_config=market_config,
+                    bars=(
+                        MarketBar(
+                            symbol="SPY",
+                            session_date="2026-09-19",
+                            available_at="2026-09-19T21:00:00+00:00",
+                            close=100,
+                        ),
+                    ),
+                    market_source_ref="fixture:archive:quiet",
+                ),
+            ),
+            external_observations=(
+                radar("DataCenter_Infra", 0.9, 0.8),
+                radar("Genomics_Bio", 0.85, 0.75),
+                radar("Rates", 0.8, 0.6),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+
+
+def test_write_read_verify_round_trip_preserves_full_typed_result(tmp_path):
+    replay_result = _full_replay_result()
+    record = build_replay_archive_record(replay_result)
+    root = tmp_path / "recomputed" / "replay_cycles"
+
+    written = write_replay_archive(
+        record,
+        root,
+        destination_visibility=ArchiveDestinationVisibility.PUBLIC,
+        public_safe=True,
+    )
+    loaded = read_replay_archive(written.path)
+
+    assert verify_replay_archive(written.path)
+    assert loaded == record
+    assert loaded.replay_result == replay_result
+
+
+def test_archive_identity_is_independent_of_root_and_mtime(tmp_path):
+    replay_result = _full_replay_result()
+    first_record = build_replay_archive_record(replay_result)
+    second_record = build_replay_archive_record(replay_result)
+    assert first_record == second_record
+
+    first = write_replay_archive(
+        first_record,
+        tmp_path / "private-a",
+        destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+    )
+    second = write_replay_archive(
+        second_record,
+        tmp_path / "private-b",
+        destination_visibility=ArchiveDestinationVisibility.PRIVATE,
+    )
+
+    os.utime(first.path, (1_000_000, 1_000_000))
+
+    assert verify_replay_archive(first.path)
+    assert verify_replay_archive(second.path)
+    assert read_replay_archive(first.path) == read_replay_archive(second.path)
+
+
+def test_replay_archive_interfaces_are_publicly_importable():
+    import decision_lab
+
+    for name in (
+        "ArchiveDestinationVisibility",
+        "ReplayArchiveRecord",
+        "ReplayArchiveWriteResult",
+        "build_replay_archive_record",
+        "read_replay_archive",
+        "replay_archive_path",
+        "verify_replay_archive",
+        "write_replay_archive",
+    ):
+        assert getattr(decision_lab, name) is not None
