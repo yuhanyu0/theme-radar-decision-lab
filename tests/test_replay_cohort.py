@@ -832,3 +832,296 @@ def test_tier_transition_ordering(source, future, expected):
     from decision_lab.replay_cohort import _tier_transition
 
     assert _tier_transition(source, future) is expected
+
+
+
+def _cycle_archive(
+    cycle_as_of,
+    *,
+    dc_direction,
+    bio_direction,
+    include_rates,
+):
+    themes = (
+        _theme_input("DataCenter_Infra", cycle_as_of),
+        _theme_input("Genomics_Bio", cycle_as_of),
+        _theme_input("Quiet", cycle_as_of),
+    )
+    observations = [
+        _independent(
+            "DataCenter_Infra",
+            f"dc:{cycle_as_of}",
+            dc_direction,
+            as_of=cycle_as_of,
+        ),
+        _independent(
+            "Genomics_Bio",
+            f"bio:{cycle_as_of}",
+            bio_direction,
+            as_of=cycle_as_of,
+        ),
+    ]
+    if include_rates:
+        observations.append(
+            _radar("Rates", as_of=cycle_as_of)
+        )
+
+    result = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of=cycle_as_of,
+            themes=themes,
+            external_observations=tuple(observations),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+    return build_replay_archive_record(result)
+
+
+def _three_cycle_cohort():
+    c0 = _cycle_archive(
+        "2026-09-19",
+        dc_direction=SupportDirection.CONTRADICTING,
+        bio_direction=SupportDirection.SUPPORTING,
+        include_rates=True,
+    )
+    c1 = _cycle_archive(
+        "2026-09-20",
+        dc_direction=SupportDirection.CONTRADICTING,
+        bio_direction=SupportDirection.SUPPORTING,
+        include_rates=False,
+    )
+    c2 = _cycle_archive(
+        "2026-09-21",
+        dc_direction=SupportDirection.SUPPORTING,
+        bio_direction=SupportDirection.CONTRADICTING,
+        include_rates=True,
+    )
+    return c0, c1, c2
+
+
+def test_three_cycle_cohort_tracks_persist_resolve_emerge_and_absence():
+    c0, c1, c2 = _three_cycle_cohort()
+    result = evaluate_replay_cohort(
+        (c2, c0, c1),
+        horizons=(2, 1),
+    )
+
+    rows = {
+        (
+            item.source_cycle_index,
+            item.horizon_cycles,
+            item.theme_id,
+        ): item
+        for item in result.transitions
+    }
+
+    dc_h1 = rows[(0, 1, "DataCenter_Infra")]
+    assert (
+        dc_h1.routing_intent
+        is RoutingIntent.FORCED_FULL_REVIEW
+    )
+    assert (
+        dc_h1.contradiction_transition
+        is ContradictionTransition.PERSISTED
+    )
+
+    dc_h2 = rows[(0, 2, "DataCenter_Infra")]
+    assert (
+        dc_h2.contradiction_transition
+        is ContradictionTransition.RESOLVED
+    )
+
+    bio_h2 = rows[(0, 2, "Genomics_Bio")]
+    assert (
+        bio_h2.routing_intent
+        is RoutingIntent.ORDINARY_FULL_RESEARCH
+    )
+    assert (
+        bio_h2.contradiction_transition
+        is ContradictionTransition.EMERGED
+    )
+
+    rates_h1 = rows[(0, 1, "Rates")]
+    assert rates_h1.future_presence is FuturePresence.NOT_PRESENT
+    assert rates_h1.future_tier is None
+
+    rates_h2 = rows[(0, 2, "Rates")]
+    assert rates_h2.future_presence is FuturePresence.PRESENT
+    assert (
+        rates_h2.future_evidence_state.evidence_class
+        is EvidenceClass.NO_INDEPENDENT
+    )
+
+    quiet_h1 = rows[(0, 1, "Quiet")]
+    assert quiet_h1.future_presence is FuturePresence.PRESENT
+    assert quiet_h1.future_replay_status is ReplayStatus.NO_OBSERVATION
+
+    assert any(
+        item.future_presence is FuturePresence.RIGHT_CENSORED
+        for item in result.transitions
+        if item.source_cycle_index > 0
+    )
+
+
+def test_summary_denominators_are_complete_partitions():
+    result = evaluate_replay_cohort(
+        _three_cycle_cohort(),
+        horizons=(1, 2),
+    )
+
+    for summary in result.summaries:
+        assert summary.source_n == (
+            summary.future_cycle_available_n
+            + summary.right_censored_n
+        )
+        assert summary.future_cycle_available_n == (
+            summary.future_present_n
+            + summary.future_not_present_n
+        )
+        assert summary.source_n == (
+            summary.contradiction_unassessed_n
+            + summary.contradiction_absent_n
+            + summary.contradiction_emerged_n
+            + summary.contradiction_persisted_n
+            + summary.contradiction_resolved_n
+        )
+        assert summary.source_n == (
+            summary.tier_unassessed_n
+            + summary.tier_same_n
+            + summary.tier_escalated_n
+            + summary.tier_deescalated_n
+        )
+        assert summary.source_n == (
+            summary.forced_review_unassessed_n
+            + summary.forced_review_inactive_n
+            + summary.forced_review_emerged_n
+            + summary.forced_review_persisted_n
+            + summary.forced_review_resolved_n
+        )
+        assert summary.source_n == (
+            summary.scanner_config_unassessed_n
+            + summary.scanner_config_same_n
+            + summary.scanner_config_changed_n
+        )
+        assert (
+            summary.evidence_class_changed_n
+            <= summary.evidence_class_comparable_n
+        )
+
+
+def test_summary_mean_counts_match_non_none_transition_deltas():
+    result = evaluate_replay_cohort(
+        _three_cycle_cohort(),
+        horizons=(1,),
+    )
+
+    for summary in result.summaries:
+        rows = [
+            item
+            for item in result.transitions
+            if item.routing_intent is summary.routing_intent
+            and item.horizon_cycles == summary.horizon_cycles
+        ]
+
+        priority = [
+            item.priority_delta
+            for item in rows
+            if item.priority_delta is not None
+        ]
+        assert summary.priority_delta_n == len(priority)
+        assert summary.mean_priority_delta == (
+            None
+            if not priority
+            else pytest.approx(sum(priority) / len(priority))
+        )
+
+        confidence = [
+            item.confidence_delta
+            for item in rows
+            if item.confidence_delta is not None
+        ]
+        assert summary.confidence_delta_n == len(confidence)
+        assert summary.mean_confidence_delta == (
+            None
+            if not confidence
+            else pytest.approx(sum(confidence) / len(confidence))
+        )
+
+        novelty = [
+            item.novelty_delta
+            for item in rows
+            if item.novelty_delta is not None
+        ]
+        assert summary.novelty_delta_n == len(novelty)
+        assert summary.mean_novelty_delta == (
+            None
+            if not novelty
+            else pytest.approx(sum(novelty) / len(novelty))
+        )
+
+
+def test_cohort_hashes_are_deterministic_and_bind_records_and_horizons():
+    c0, c1, c2 = _three_cycle_cohort()
+
+    first = evaluate_replay_cohort(
+        (c0, c1, c2),
+        horizons=(2, 1),
+    )
+    second = evaluate_replay_cohort(
+        (c2, c0, c1),
+        horizons=(1, 2),
+    )
+
+    assert second == first
+
+    changed_horizon = evaluate_replay_cohort(
+        (c0, c1, c2),
+        horizons=(1,),
+    )
+    assert changed_horizon.input_hash != first.input_hash
+
+    changed_record = evaluate_replay_cohort(
+        (c0, c1),
+        horizons=(1, 2),
+    )
+    assert changed_record.input_hash != first.input_hash
+
+
+def test_result_hash_binds_complete_cohort_output():
+    result = evaluate_replay_cohort(
+        _three_cycle_cohort(),
+        horizons=(1, 2),
+    )
+    payload = {
+        "schema_version": result.schema_version,
+        "evaluation_scope": result.evaluation_scope,
+        "horizons": list(result.horizons),
+        "cycles": list(result.cycles),
+        "archive_record_hashes": list(result.archive_record_hashes),
+        "transitions": [asdict(x) for x in result.transitions],
+        "summaries": [asdict(x) for x in result.summaries],
+        "limitations": list(result.limitations),
+        "input_hash": result.input_hash,
+    }
+    assert result.result_hash == canonical_hash(payload)
+
+
+def test_replay_cohort_interfaces_are_publicly_importable():
+    import decision_lab
+
+    for name in (
+        "EvidenceClass",
+        "FuturePresence",
+        "RoutingIntent",
+        "ContradictionTransition",
+        "TierTransition",
+        "IndependentEvidenceState",
+        "ReplayCohortTransition",
+        "ReplayCohortSummary",
+        "ReplayCohortResult",
+        "evaluate_replay_cohort",
+    ):
+        assert getattr(decision_lab, name) is not None
