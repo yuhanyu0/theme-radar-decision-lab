@@ -204,7 +204,10 @@ def test_theme_mismatch_and_invalid_spec_are_rejected():
             proxies=("SPY",),
         ).validate()
 
-    with pytest.raises(ValueError, match="normalization scales must be positive"):
+    with pytest.raises(
+        ValueError,
+        match="normalization scales must be finite and positive",
+    ):
         replace(MarketObservationConfig(), novelty_scale=0.0).validate()
 
 
