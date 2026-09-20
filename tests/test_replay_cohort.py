@@ -3,7 +3,18 @@ from dataclasses import asdict, replace
 import pytest
 
 from decision_lab.ledger import canonical_hash
-from decision_lab.replay import ReplayCycleInput, ReplayStatus, run_replay_cycle
+from decision_lab.market_observation import (
+    MarketBar,
+    MarketObservationConfig,
+    MarketObservationMode,
+    MarketObservationSpec,
+)
+from decision_lab.replay import (
+    ReplayCycleInput,
+    ReplayStatus,
+    ThemeReplayInput,
+    run_replay_cycle,
+)
 from decision_lab.replay_archive import build_replay_archive_record
 from decision_lab.replay_cohort import (
     ContradictionTransition,
@@ -15,6 +26,8 @@ from decision_lab.replay_cohort import (
     ReplayCohortTransition,
     RoutingIntent,
     TierTransition,
+    _independent_evidence_state,
+    _routing_intent,
     evaluate_replay_cohort,
 )
 from decision_lab.research_budget import ResearchBudgetConfig, ResearchTier
@@ -23,6 +36,13 @@ from decision_lab.scanner import (
     SupportDirection,
     ThemeScanObservation,
 )
+from decision_lab.themes import (
+    ThemeDefinition,
+    ThemeKeyPolicy,
+    ThemeLifecycleState,
+    ThemePackage,
+)
+from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
 
 def _radar(theme="Rates", *, as_of="2026-09-19"):
@@ -248,3 +268,321 @@ def test_hash_valid_observation_without_theme_record_is_rejected():
         match="observation theme missing from replay records",
     ):
         evaluate_replay_cohort((bad,), horizons=(1,))
+
+
+
+def _independent(
+    theme,
+    source_ref,
+    direction,
+    *,
+    as_of="2026-09-19",
+):
+    return ThemeScanObservation(
+        theme_id=theme,
+        as_of=as_of,
+        source_type="derived_feature",
+        source_ref=source_ref,
+        discovery_signal=0.9,
+        structure_signal=0.9,
+        persistence_signal=0.9,
+        breadth_signal=0.9,
+        relative_strength_signal=0.9,
+        novelty_signal=0.9,
+        support_direction=direction,
+        evidence_refs=(source_ref,),
+        is_independent=True,
+        observed_or_inferred="inferred",
+    )
+
+
+@pytest.mark.parametrize(
+    ("observations", "expected_class", "counts"),
+    [
+        ((), EvidenceClass.NO_INDEPENDENT, (0, 0, 0, 0)),
+        (
+            (_independent("T", "s1", SupportDirection.SUPPORTING),),
+            EvidenceClass.SUPPORT_ONLY,
+            (1, 1, 0, 0),
+        ),
+        (
+            (_independent("T", "s1", SupportDirection.CONTRADICTING),),
+            EvidenceClass.CONTRADICTION_PRESENT,
+            (1, 0, 1, 0),
+        ),
+        (
+            (_independent("T", "s1", SupportDirection.NEUTRAL),),
+            EvidenceClass.NEUTRAL_ONLY,
+            (1, 0, 0, 1),
+        ),
+        (
+            (
+                _independent("T", "a", SupportDirection.SUPPORTING),
+                _independent("T", "b", SupportDirection.CONTRADICTING),
+            ),
+            EvidenceClass.MIXED,
+            (2, 1, 1, 0),
+        ),
+    ],
+)
+def test_independent_evidence_classification(
+    observations,
+    expected_class,
+    counts,
+):
+    record = _archive(
+        observations=(
+            *observations,
+            _radar("T"),
+        )
+    )
+    state = _independent_evidence_state(
+        record.replay_result,
+        "T",
+    )
+
+    assert state.evidence_class is expected_class
+    assert (
+        state.independent_source_count,
+        state.supporting_source_count,
+        state.contradicting_source_count,
+        state.neutral_source_count,
+    ) == counts
+
+
+def test_same_independent_source_counts_once_with_contradiction_precedence():
+    observations = (
+        _independent("T", "same", SupportDirection.SUPPORTING),
+        _independent("T", "same", SupportDirection.CONTRADICTING),
+    )
+    record = _archive(observations=observations)
+
+    state = _independent_evidence_state(
+        record.replay_result,
+        "T",
+    )
+
+    assert state.independent_source_count == 1
+    assert state.supporting_source_count == 0
+    assert state.contradicting_source_count == 1
+    assert state.contradicting_source_refs == ("same",)
+
+
+def test_conflicting_source_metadata_is_rejected_even_with_no_horizons():
+    first = _independent("T", "same", SupportDirection.SUPPORTING)
+    record = _archive(observations=(first,))
+    result = record.replay_result
+    conflicting = replace(
+        first,
+        source_type="industry_primary",
+    )
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            combined_observations=(
+                *result.combined_observations,
+                conflicting,
+            ),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="conflicting cohort source metadata",
+    ):
+        evaluate_replay_cohort((bad,), horizons=())
+
+
+def _package(theme):
+    universe = ThemeUniverse(
+        theme=theme,
+        version="u1",
+        generated_at="2026-09-19T00:00:00Z",
+    )
+    universe.add_layer(ThemeLayer("layer"))
+    universe.add_candidate(
+        Candidate(
+            ticker=f"{theme[:3].upper()}1",
+            theme=theme,
+            layer="layer",
+            effective_from="2026-01-01",
+        )
+    )
+    return ThemePackage(
+        definition=ThemeDefinition(
+            theme_id=theme,
+            display_name=theme,
+            lifecycle_state=ThemeLifecycleState.STRENGTHENING,
+            effective_from="2026-01-01",
+            version="1",
+        ),
+        universe=universe,
+        theme_key_policy=ThemeKeyPolicy(),
+        evidence_adapter="generic",
+        version="p1",
+        source_path="fixture",
+    )
+
+
+def _theme_input(theme, cycle_as_of):
+    return ThemeReplayInput(
+        package=_package(theme),
+        market_spec=MarketObservationSpec(
+            theme_id=theme,
+            mode=MarketObservationMode.BASKET,
+            benchmark="SPY",
+            current_return_sessions=1,
+            prior_return_sessions=1,
+            min_basket_members=1,
+            version="test",
+        ),
+        market_config=MarketObservationConfig(),
+        bars=(
+            MarketBar(
+                symbol="SPY",
+                session_date=cycle_as_of[:10],
+                available_at=f"{cycle_as_of[:10]}T21:00:00+00:00",
+                close=100,
+            ),
+        ),
+        market_source_ref=f"fixture:{theme}:{cycle_as_of}",
+    )
+
+
+def _registered_archive(
+    *,
+    cycle_as_of="2026-09-19",
+    themes=("FullTheme",),
+    observations=(),
+    budget_config=None,
+):
+    result = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of=cycle_as_of,
+            themes=tuple(
+                _theme_input(theme, cycle_as_of)
+                for theme in themes
+            ),
+            external_observations=tuple(observations),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=(
+                budget_config or ResearchBudgetConfig()
+            ),
+        )
+    )
+    return build_replay_archive_record(result)
+
+
+def test_routing_intent_distinguishes_no_observation_and_ordinary_full():
+    quiet = _registered_archive(
+        themes=("Quiet",),
+        observations=(),
+    )
+    assert (
+        _routing_intent(quiet.replay_result.theme_records[0])
+        is RoutingIntent.NO_OBSERVATION
+    )
+
+    full = _registered_archive(
+        themes=("FullTheme",),
+        observations=(
+            _independent(
+                "FullTheme",
+                "independent:full",
+                SupportDirection.SUPPORTING,
+            ),
+        ),
+    )
+    assert (
+        _routing_intent(full.replay_result.theme_records[0])
+        is RoutingIntent.ORDINARY_FULL_RESEARCH
+    )
+
+
+def test_routing_intent_distinguishes_forced_full_and_capacity_missed():
+    contradiction = _independent(
+        "RiskTheme",
+        "independent:risk",
+        SupportDirection.CONTRADICTING,
+    )
+    forced_full = _registered_archive(
+        themes=("RiskTheme",),
+        observations=(contradiction,),
+    )
+    assert (
+        _routing_intent(forced_full.replay_result.theme_records[0])
+        is RoutingIntent.FORCED_FULL_REVIEW
+    )
+
+    missed = _registered_archive(
+        themes=("RiskTheme",),
+        observations=(contradiction,),
+        budget_config=replace(
+            ResearchBudgetConfig(),
+            full_decision_slots=0,
+        ),
+    )
+    assert (
+        _routing_intent(missed.replay_result.theme_records[0])
+        is RoutingIntent.FORCED_REVIEW_CAPACITY_MISSED
+    )
+
+
+def test_routing_intent_distinguishes_theme_research_and_scan_only():
+    low_novelty = replace(
+        _independent(
+            "ResearchTheme",
+            "independent:research",
+            SupportDirection.SUPPORTING,
+        ),
+        novelty_signal=0.1,
+    )
+    theme_research = _registered_archive(
+        themes=("ResearchTheme",),
+        observations=(low_novelty,),
+    )
+    assert (
+        _routing_intent(
+            theme_research.replay_result.theme_records[0]
+        )
+        is RoutingIntent.ORDINARY_THEME_RESEARCH
+    )
+
+    scan_only = _archive(
+        observations=(_radar("Rates"),),
+    )
+    assert (
+        _routing_intent(scan_only.replay_result.theme_records[0])
+        is RoutingIntent.SCAN_ONLY
+    )
+
+
+def test_forced_review_mismatch_is_rejected_even_with_no_horizons():
+    record = _registered_archive(
+        themes=("RiskTheme",),
+        observations=(
+            _independent(
+                "RiskTheme",
+                "risk",
+                SupportDirection.CONTRADICTING,
+            ),
+        ),
+    )
+    result = record.replay_result
+    allocation = replace(result.allocations[0], forced_review=False)
+    theme_record = replace(
+        result.theme_records[0],
+        allocation=allocation,
+    )
+    bad = _archive_from_semantically_modified_result(
+        replace(
+            result,
+            allocations=(allocation,),
+            theme_records=(theme_record,),
+        )
+    )
+
+    with pytest.raises(ValueError, match="forced-review flag mismatch"):
+        evaluate_replay_cohort((bad,), horizons=())
