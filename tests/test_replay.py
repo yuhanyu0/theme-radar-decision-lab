@@ -1,9 +1,10 @@
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
 import pytest
 
+from decision_lab.ledger import canonical_hash
 from decision_lab.market_observation import (
     MarketBar,
     MarketObservationConfig,
@@ -443,3 +444,349 @@ def test_future_prior_allocation_error_propagates_from_allocator():
                 prior_allocations=(future_prior,),
             )
         )
+
+
+
+def _ready_theme_input(
+    *,
+    package=None,
+    source_path=None,
+    generated_at=None,
+    used_end_close=103,
+    extra_bars=(),
+):
+    package = package or _package(
+        source_path=source_path or "fixture-a",
+        generated_at=generated_at or "2026-09-19T00:00:00Z",
+    )
+    bars = (
+        _bar("SPY", "2026-09-17", 100),
+        _bar("SPY", "2026-09-18", 100),
+        _bar("SPY", "2026-09-19", 100),
+        _bar("AAA", "2026-09-17", 100),
+        _bar("AAA", "2026-09-18", 100),
+        _bar("AAA", "2026-09-19", used_end_close),
+        *extra_bars,
+    )
+    return ThemeReplayInput(
+        package=package,
+        market_spec=_spec(package.definition.theme_id),
+        market_config=MarketObservationConfig(),
+        bars=tuple(bars),
+        market_source_ref="fixture:semantic-hash",
+    )
+
+
+def _replace_candidate(package, **changes):
+    copied = deepcopy(package)
+    original = copied.universe.candidates["AAA"]
+    copied.universe.candidates["AAA"] = replace(original, **changes)
+    return copied
+
+
+def _prior_scan(theme, as_of, *, priority=0.5):
+    from decision_lab.scanner import ThemeScanResult
+
+    return ThemeScanResult(
+        theme_id=theme,
+        as_of=as_of,
+        discovery_score=0.5,
+        structural_score=0.5,
+        persistence_score=0.5,
+        breadth_score=0.5,
+        relative_strength_score=0.5,
+        novelty_score=0.1,
+        evidence_confidence=0.5,
+        independent_support_count=1,
+        independent_contradiction_count=0,
+        lifecycle_recommendation="no_change",
+        research_priority=priority,
+        forced_review=False,
+        forced_review_severity=0,
+        forced_review_reasons=(),
+        reasons=(),
+        evidence_refs=(f"prior:{theme}",),
+        config_hash="prior",
+        registry_version=None,
+        prior_result_refs=(),
+    )
+
+
+def _prior_allocation(theme, as_of, *, effective_priority=0.5):
+    from decision_lab.research_budget import ResearchAllocation
+
+    return ResearchAllocation(
+        theme_id=theme,
+        as_of=as_of,
+        tier=ResearchTier.SCAN_ONLY,
+        scan_priority=0.5,
+        effective_priority=effective_priority,
+        scan_novelty_score=0.1,
+        forced_review=False,
+        allocation_reasons=("prior",),
+        source_scan_result_hash=f"prior:{theme}",
+    )
+
+
+def test_input_order_is_semantically_irrelevant():
+    a = _ready_theme_input(package=_package(theme="A"))
+    b = _ready_theme_input(package=_package(theme="B"))
+    oa = _radar_observation("UnknownA")
+    ob = _radar_observation("UnknownB")
+
+    first = run_replay_cycle(
+        _cycle(
+            themes=(a, b),
+            external_observations=(oa, ob),
+        )
+    )
+    second = run_replay_cycle(
+        _cycle(
+            themes=(b, a),
+            external_observations=(ob, oa),
+        )
+    )
+
+    assert second == first
+
+
+def test_prior_history_order_is_semantically_irrelevant():
+    current = _radar_observation("Rates")
+    scan_a = _prior_scan("A", "2026-09-17")
+    scan_b = _prior_scan("B", "2026-09-18")
+    allocation_a = _prior_allocation("A", "2026-09-17")
+    allocation_b = _prior_allocation("B", "2026-09-18")
+
+    first = run_replay_cycle(
+        _cycle(
+            external_observations=(current,),
+            prior_scan_results=(scan_a, scan_b),
+            prior_allocations=(allocation_a, allocation_b),
+        )
+    )
+    second = run_replay_cycle(
+        _cycle(
+            external_observations=(current,),
+            prior_scan_results=(scan_b, scan_a),
+            prior_allocations=(allocation_b, allocation_a),
+        )
+    )
+
+    assert second == first
+    assert second.input_hash == first.input_hash
+    assert second.result_hash == first.result_hash
+
+
+def test_reversing_raw_bar_order_does_not_change_hashes():
+    theme_input = _ready_theme_input()
+    reversed_input = replace(
+        theme_input,
+        bars=tuple(reversed(theme_input.bars)),
+    )
+
+    first = run_replay_cycle(_cycle(themes=(theme_input,)))
+    second = run_replay_cycle(_cycle(themes=(reversed_input,)))
+
+    assert second.input_hash == first.input_hash
+    assert second.result_hash == first.result_hash
+    assert second == first
+
+
+def test_unrelated_unused_bar_does_not_change_replay_hash():
+    first_input = _ready_theme_input()
+    second_input = _ready_theme_input(
+        extra_bars=(
+            MarketBar(
+                symbol="UNUSED",
+                session_date="bad-date",
+                available_at="2099-01-01",
+                close=-1,
+            ),
+        )
+    )
+
+    first = run_replay_cycle(_cycle(themes=(first_input,)))
+    second = run_replay_cycle(_cycle(themes=(second_input,)))
+
+    assert second.input_hash == first.input_hash
+    assert second.result_hash == first.result_hash
+
+
+def test_generated_at_and_source_path_do_not_change_input_hash():
+    first = run_replay_cycle(
+        _cycle(
+            themes=(
+                _ready_theme_input(
+                    package=_package(
+                        source_path="path-a",
+                        generated_at="2026-09-19T00:00:00Z",
+                    )
+                ),
+            )
+        )
+    )
+    second = run_replay_cycle(
+        _cycle(
+            themes=(
+                _ready_theme_input(
+                    package=_package(
+                        source_path="path-b",
+                        generated_at="2099-01-01T00:00:00Z",
+                    )
+                ),
+            )
+        )
+    )
+
+    assert second.input_hash == first.input_hash
+    assert second.result_hash == first.result_hash
+
+
+def test_candidate_annotation_only_changes_do_not_change_input_hash():
+    base = _package()
+    annotated = _replace_candidate(
+        base,
+        notes="different note",
+        expression_role="beta_proxy",
+        economic_exposure=0.1,
+        evidence_strength=0.2,
+    )
+
+    first = run_replay_cycle(
+        _cycle(themes=(_ready_theme_input(package=base),))
+    )
+    second = run_replay_cycle(
+        _cycle(themes=(_ready_theme_input(package=annotated),))
+    )
+
+    assert second.input_hash == first.input_hash
+
+
+def test_definition_display_annotations_do_not_change_input_hash():
+    base = _package()
+    changed_definition = replace(
+        base.definition,
+        display_name="Different display",
+        thesis_summary="Different prose",
+    )
+    changed = replace(base, definition=changed_definition)
+
+    first = run_replay_cycle(
+        _cycle(themes=(_ready_theme_input(package=base),))
+    )
+    second = run_replay_cycle(
+        _cycle(themes=(_ready_theme_input(package=changed),))
+    )
+
+    assert second.input_hash == first.input_hash
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "used_bar",
+        "candidate_effective_from",
+        "candidate_provenance",
+        "definition_lifecycle",
+        "definition_effective_from",
+        "definition_provenance",
+        "scanner_config",
+        "budget_config",
+        "external_observation",
+        "prior_allocation_history",
+    ],
+)
+def test_semantic_changes_move_replay_input_hash(mutation):
+    base_theme = _ready_theme_input()
+    kwargs = {"themes": (base_theme,)}
+
+    if mutation == "used_bar":
+        kwargs["themes"] = (_ready_theme_input(used_end_close=120),)
+    elif mutation == "candidate_effective_from":
+        changed = _replace_candidate(
+            base_theme.package,
+            effective_from="2026-09-18",
+        )
+        kwargs["themes"] = (_ready_theme_input(package=changed),)
+    elif mutation == "candidate_provenance":
+        changed = _replace_candidate(
+            base_theme.package,
+            provenance=("different:provenance",),
+        )
+        kwargs["themes"] = (_ready_theme_input(package=changed),)
+    elif mutation == "definition_lifecycle":
+        changed = replace(
+            base_theme.package,
+            definition=replace(
+                base_theme.package.definition,
+                lifecycle_state=ThemeLifecycleState.MATURE,
+            ),
+        )
+        kwargs["themes"] = (_ready_theme_input(package=changed),)
+    elif mutation == "definition_effective_from":
+        changed = replace(
+            base_theme.package,
+            definition=replace(
+                base_theme.package.definition,
+                effective_from="2025-12-31",
+            ),
+        )
+        kwargs["themes"] = (_ready_theme_input(package=changed),)
+    elif mutation == "definition_provenance":
+        changed = replace(
+            base_theme.package,
+            definition=replace(
+                base_theme.package.definition,
+                provenance=("different:definition",),
+            ),
+        )
+        kwargs["themes"] = (_ready_theme_input(package=changed),)
+    elif mutation == "scanner_config":
+        kwargs["scanner_config"] = replace(
+            ScannerConfig(),
+            stale_after_days=7,
+        )
+    elif mutation == "budget_config":
+        kwargs["budget_config"] = replace(
+            ResearchBudgetConfig(),
+            theme_research_slots=7,
+        )
+    elif mutation == "external_observation":
+        kwargs["external_observations"] = (
+            _radar_observation("Rates", discovery=0.9),
+        )
+    elif mutation == "prior_allocation_history":
+        kwargs["prior_allocations"] = (
+            _prior_allocation(
+                "TestTheme",
+                "2026-09-18",
+                effective_priority=0.6,
+            ),
+        )
+
+    baseline = run_replay_cycle(
+        _cycle(themes=(base_theme,))
+    )
+    changed = run_replay_cycle(_cycle(**kwargs))
+
+    assert changed.input_hash != baseline.input_hash
+
+
+def test_result_hash_binds_output_not_only_input_hash():
+    result = run_replay_cycle(
+        _cycle(themes=(_ready_theme_input(),))
+    )
+
+    payload = {
+        "cycle_as_of": result.cycle_as_of,
+        "input_hash": result.input_hash,
+        "market_batches": [asdict(x) for x in result.market_batches],
+        "combined_observations": [
+            asdict(x) for x in result.combined_observations
+        ],
+        "scan_results": [asdict(x) for x in result.scan_results],
+        "allocations": [asdict(x) for x in result.allocations],
+        "theme_records": [asdict(x) for x in result.theme_records],
+    }
+
+    assert result.result_hash == canonical_hash(payload)
