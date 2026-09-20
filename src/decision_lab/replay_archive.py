@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from enum import Enum
 import json
 from math import isfinite
+import os
 from pathlib import Path
 import re
 
@@ -1032,3 +1033,127 @@ def verify_replay_archive(path: str | Path) -> bool:
     except (ValueError, TypeError, json.JSONDecodeError):
         return False
     return True
+
+
+
+def _contains_path_sequence(
+    parts: tuple[str, ...],
+    sequence: tuple[str, ...],
+) -> bool:
+    width = len(sequence)
+    return any(
+        tuple(parts[index : index + width]) == sequence
+        for index in range(len(parts) - width + 1)
+    )
+
+
+def _resolved_archive_root(archive_root: str | Path) -> Path:
+    return Path(archive_root).expanduser().resolve(strict=False)
+
+
+def _validate_destination_policy(
+    archive_root: str | Path,
+    *,
+    destination_visibility: ArchiveDestinationVisibility,
+    public_safe: bool,
+) -> Path:
+    if not isinstance(
+        destination_visibility,
+        ArchiveDestinationVisibility,
+    ):
+        raise TypeError("invalid archive destination visibility")
+
+    resolved = _resolved_archive_root(archive_root)
+    parts = tuple(resolved.parts)
+
+    if _contains_path_sequence(parts, ("ledger", "live")):
+        raise ValueError(
+            "replay archives may not be written under ledger/live"
+        )
+
+    if destination_visibility is ArchiveDestinationVisibility.PUBLIC:
+        if not public_safe:
+            raise PermissionError(
+                "public archive write requires explicit public_safe=True"
+            )
+        if len(parts) < 2 or parts[-2:] != (
+            "recomputed",
+            "replay_cycles",
+        ):
+            raise ValueError(
+                "public replay archives must use recomputed/replay_cycles"
+            )
+
+    return resolved
+
+
+def _serialize_archive_record(record: ReplayArchiveRecord) -> bytes:
+    return (
+        json.dumps(
+            _record_payload(record),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def write_replay_archive(
+    record: ReplayArchiveRecord,
+    archive_root: str | Path,
+    *,
+    destination_visibility: ArchiveDestinationVisibility,
+    public_safe: bool = False,
+) -> ReplayArchiveWriteResult:
+    resolved_root = _validate_destination_policy(
+        archive_root,
+        destination_visibility=destination_visibility,
+        public_safe=public_safe,
+    )
+    _validate_archive_record(record)
+
+    path = replay_archive_path(record, resolved_root)
+    requested_payload = _record_payload(record)
+    requested_bytes = _serialize_archive_record(record)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        fd = os.open(path, flags, 0o644)
+    except FileExistsError:
+        try:
+            existing = read_replay_archive(path)
+        except (
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            FileNotFoundError,
+        ) as exc:
+            raise FileExistsError("archive path conflict") from exc
+
+        if _record_payload(existing) != requested_payload:
+            raise FileExistsError("archive path conflict")
+
+        return ReplayArchiveWriteResult(
+            path=path,
+            created=False,
+            replay_result_hash=record.replay_result_hash,
+            archive_record_hash=record.archive_record_hash,
+        )
+
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(requested_bytes)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+    return ReplayArchiveWriteResult(
+        path=path,
+        created=True,
+        replay_result_hash=record.replay_result_hash,
+        archive_record_hash=record.archive_record_hash,
+    )
