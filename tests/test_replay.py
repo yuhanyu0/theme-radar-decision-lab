@@ -16,8 +16,12 @@ from decision_lab.replay import (
     ThemeReplayInput,
     run_replay_cycle,
 )
-from decision_lab.research_budget import ResearchBudgetConfig
-from decision_lab.scanner import ScannerConfig
+from decision_lab.research_budget import ResearchBudgetConfig, ResearchTier
+from decision_lab.scanner import (
+    ScannerConfig,
+    SupportDirection,
+    ThemeScanObservation,
+)
 from decision_lab.themes import (
     ThemeDefinition,
     ThemeKeyPolicy,
@@ -270,3 +274,172 @@ def test_prior_history_alone_does_not_create_current_theme_record():
     )
 
     assert result.theme_records == ()
+
+
+
+def _three_sessions():
+    return ("2026-09-17", "2026-09-18", "2026-09-19")
+
+
+def _coverage_pending_theme_input(theme="QuietTheme"):
+    package = _package(theme=theme)
+    spec = MarketObservationSpec(
+        theme_id=theme,
+        mode=MarketObservationMode.BASKET,
+        benchmark="SPY",
+        current_return_sessions=1,
+        prior_return_sessions=1,
+        min_basket_members=1,
+        version="test",
+    )
+    return ThemeReplayInput(
+        package=package,
+        market_spec=spec,
+        market_config=MarketObservationConfig(),
+        bars=(_bar("SPY", "2026-09-19", 100),),
+        market_source_ref=f"fixture:{theme}",
+    )
+
+
+def _radar_observation(theme, *, discovery=0.8, novelty=0.6):
+    return ThemeScanObservation(
+        theme_id=theme,
+        as_of="2026-09-19",
+        source_type="radar_model_output",
+        source_ref=f"radar:{theme}:2026-09-19",
+        discovery_signal=discovery,
+        novelty_signal=novelty,
+        support_direction=SupportDirection.SUPPORTING,
+        evidence_refs=(f"radar:{theme}",),
+        is_independent=False,
+        observed_or_inferred="inferred",
+    )
+
+
+def test_registered_coverage_pending_without_external_evidence_is_no_observation():
+    result = run_replay_cycle(
+        _cycle(themes=(_coverage_pending_theme_input(),))
+    )
+
+    record = result.theme_records[0]
+    assert record.theme_id == "QuietTheme"
+    assert record.registered
+    assert record.market_batch is not None
+    assert record.market_batch.observations == ()
+    assert record.scan_result is None
+    assert record.allocation is None
+    assert record.replay_status is ReplayStatus.NO_OBSERVATION
+    assert result.scan_results == ()
+    assert result.allocations == ()
+
+
+def test_registered_coverage_pending_with_model_evidence_is_routed_scan_only():
+    theme_input = _coverage_pending_theme_input()
+    result = run_replay_cycle(
+        _cycle(
+            themes=(theme_input,),
+            external_observations=(_radar_observation("QuietTheme"),),
+        )
+    )
+
+    record = result.theme_records[0]
+    assert record.registered
+    assert record.replay_status is ReplayStatus.ROUTED
+    assert record.scan_result is not None
+    assert record.allocation is not None
+    assert record.allocation.tier is ResearchTier.SCAN_ONLY
+
+
+def test_unknown_model_only_theme_is_real_scan_only_not_no_observation():
+    result = run_replay_cycle(
+        _cycle(
+            external_observations=(_radar_observation("Rates"),),
+        )
+    )
+
+    record = result.theme_records[0]
+    assert record.theme_id == "Rates"
+    assert not record.registered
+    assert record.market_batch is None
+    assert record.scan_result is not None
+    assert record.allocation is not None
+    assert record.allocation.tier is ResearchTier.SCAN_ONLY
+    assert record.replay_status is ReplayStatus.ROUTED
+
+
+def test_market_as_of_can_precede_cycle_as_of_while_allocation_uses_cycle():
+    package = _package()
+    spec = MarketObservationSpec(
+        theme_id="TestTheme",
+        mode=MarketObservationMode.BASKET,
+        benchmark="SPY",
+        current_return_sessions=1,
+        prior_return_sessions=1,
+        min_basket_members=1,
+        version="test",
+    )
+    bars = (
+        _bar("SPY", "2026-09-16", 100),
+        _bar("SPY", "2026-09-17", 100),
+        _bar("SPY", "2026-09-18", 100),
+        _bar("AAA", "2026-09-16", 100),
+        _bar("AAA", "2026-09-17", 100),
+        _bar("AAA", "2026-09-18", 103),
+    )
+    theme_input = ThemeReplayInput(
+        package=package,
+        market_spec=spec,
+        market_config=MarketObservationConfig(),
+        bars=bars,
+        market_source_ref="fixture:weekend",
+    )
+
+    result = run_replay_cycle(
+        _cycle(
+            cycle_as_of="2026-09-19",
+            themes=(theme_input,),
+        )
+    )
+
+    assert result.market_batches[0].market_as_of == "2026-09-18"
+    assert result.combined_observations[0].as_of == "2026-09-18"
+    assert result.allocations[0].as_of == "2026-09-19"
+
+
+def test_external_future_observation_error_propagates_from_scanner():
+    future = replace(
+        _radar_observation("Rates"),
+        as_of="2026-09-20",
+    )
+
+    with pytest.raises(ValueError, match="future-dated observation"):
+        run_replay_cycle(
+            _cycle(external_observations=(future,))
+        )
+
+
+def test_future_prior_allocation_error_propagates_from_allocator():
+    from decision_lab.research_budget import ResearchAllocation
+
+    future_prior = ResearchAllocation(
+        theme_id="Rates",
+        as_of="2026-09-20",
+        tier=ResearchTier.SCAN_ONLY,
+        scan_priority=0.5,
+        effective_priority=0.5,
+        scan_novelty_score=0.2,
+        forced_review=False,
+        allocation_reasons=("prior",),
+        source_scan_result_hash="prior",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="prior research allocation must be strictly earlier",
+    ):
+        run_replay_cycle(
+            _cycle(
+                external_observations=(_radar_observation("Rates"),),
+                prior_allocations=(future_prior,),
+            )
+        )
