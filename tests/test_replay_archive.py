@@ -1,18 +1,21 @@
 from dataclasses import asdict, replace
+import json
 from pathlib import Path
 
 import pytest
 
 from decision_lab.ledger import canonical_hash
-from decision_lab.replay import ReplayCycleInput, run_replay_cycle
+from decision_lab.replay import ReplayCycleInput, ReplayStatus, run_replay_cycle
 from decision_lab.replay_archive import (
     ArchiveDestinationVisibility,
     ReplayArchiveRecord,
     ReplayArchiveWriteResult,
     build_replay_archive_record,
+    read_replay_archive,
     replay_archive_path,
+    verify_replay_archive,
 )
-from decision_lab.research_budget import ResearchBudgetConfig
+from decision_lab.research_budget import ResearchBudgetConfig, ResearchTier
 from decision_lab.scanner import ScannerConfig, SupportDirection, ThemeScanObservation
 
 
@@ -133,3 +136,216 @@ def test_build_rejects_non_finite_replay_payload():
 
     with pytest.raises(ValueError):
         build_replay_archive_record(bad)
+
+
+
+def _record_payload(record):
+    return {
+        "schema_version": record.schema_version,
+        "content_type": record.content_type,
+        "producer": record.producer,
+        "cycle_as_of": record.cycle_as_of,
+        "replay_input_hash": record.replay_input_hash,
+        "replay_result_hash": record.replay_result_hash,
+        "replay_result": asdict(record.replay_result),
+        "archive_record_hash": record.archive_record_hash,
+    }
+
+
+def _write_payload(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _standard_path(tmp_path, record):
+    return (
+        tmp_path
+        / "2026-09-19"
+        / f"{record.replay_result_hash}.json"
+    )
+
+
+def test_reader_round_trips_typed_replay_result(tmp_path):
+    result = _sample_replay_result()
+    record = build_replay_archive_record(result)
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, _record_payload(record))
+
+    loaded = read_replay_archive(path)
+
+    assert loaded == record
+    assert loaded.replay_result == result
+    assert loaded.replay_result.theme_records[0].replay_status is ReplayStatus.ROUTED
+    assert loaded.replay_result.allocations[0].tier is ResearchTier.SCAN_ONLY
+    assert verify_replay_archive(path)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "allocation_tier",
+        "scan_priority",
+        "embedded_result_hash",
+        "top_result_hash",
+        "top_input_hash",
+        "archive_hash",
+    ],
+)
+def test_tampering_invalidates_archive(tmp_path, mutation):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+
+    if mutation == "allocation_tier":
+        payload["replay_result"]["allocations"][0]["tier"] = (
+            "FULL_DECISION_RESEARCH"
+        )
+    elif mutation == "scan_priority":
+        payload["replay_result"]["scan_results"][0]["research_priority"] = 0.99
+    elif mutation == "embedded_result_hash":
+        payload["replay_result"]["result_hash"] = "1" * 64
+    elif mutation == "top_result_hash":
+        payload["replay_result_hash"] = "1" * 64
+    elif mutation == "top_input_hash":
+        payload["replay_input_hash"] = "1" * 64
+    elif mutation == "archive_hash":
+        payload["archive_record_hash"] = "1" * 64
+
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    assert not verify_replay_archive(path)
+    with pytest.raises(ValueError):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_extra_top_level_field(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload["unexpected"] = "value"
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(ValueError, match="unexpected archive fields"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_extra_nested_field(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload["replay_result"]["allocations"][0]["unexpected"] = 1
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(ValueError, match="unexpected ResearchAllocation fields"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_missing_nested_field(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload["replay_result"]["scan_results"][0].pop("theme_id")
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(ValueError, match="missing ThemeScanResult fields"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_invalid_nested_enum(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload["replay_result"]["theme_records"][0]["replay_status"] = "magic"
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(ValueError):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_string_for_numeric_field(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload["replay_result"]["scan_results"][0]["research_priority"] = "0.5"
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(TypeError, match="research_priority"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_non_string_identity_field(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload["replay_result"]["scan_results"][0]["theme_id"] = 123
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(TypeError, match="theme_id"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_non_finite_json_constant(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload["replay_result"]["scan_results"][0]["research_priority"] = float("nan")
+    path = _standard_path(tmp_path, record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, allow_nan=True),
+        encoding="utf-8",
+    )
+
+    assert not verify_replay_archive(path)
+    with pytest.raises(ValueError, match="non-finite JSON constant"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_missing_top_level_field(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    payload = _record_payload(record)
+    payload.pop("producer")
+    path = _standard_path(tmp_path, record)
+    _write_payload(path, payload)
+
+    with pytest.raises(ValueError, match="missing archive fields"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_wrong_filename(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    path = tmp_path / "2026-09-19" / f"{'1' * 64}.json"
+    _write_payload(path, _record_payload(record))
+
+    assert not verify_replay_archive(path)
+    with pytest.raises(ValueError, match="archive filename mismatch"):
+        read_replay_archive(path)
+
+
+def test_reader_rejects_wrong_cycle_directory(tmp_path):
+    record = build_replay_archive_record(_sample_replay_result())
+    path = tmp_path / "2026-09-18" / f"{record.replay_result_hash}.json"
+    _write_payload(path, _record_payload(record))
+
+    assert not verify_replay_archive(path)
+    with pytest.raises(ValueError, match="archive cycle directory mismatch"):
+        read_replay_archive(path)
+
+
+def test_verify_returns_false_for_missing_and_malformed_json(tmp_path):
+    missing = tmp_path / "missing.json"
+    assert not verify_replay_archive(missing)
+
+    malformed = tmp_path / "bad" / "payload.json"
+    malformed.parent.mkdir(parents=True)
+    malformed.write_text("{not-json", encoding="utf-8")
+    assert not verify_replay_archive(malformed)
