@@ -1406,7 +1406,7 @@ def test_unregistered_forced_review_cannot_claim_capacity_exhaustion():
 
     with pytest.raises(
         ValueError,
-        match="unsupported forced-review allocation state",
+        match="unsupported unregistered allocation state",
     ):
         evaluate_replay_cohort((bad,), horizons=())
 
