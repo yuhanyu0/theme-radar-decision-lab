@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from decision_lab.ledger import canonical_hash
 from decision_lab.market_observation import (
     MarketBar,
     MarketObservationConfig,
@@ -13,7 +14,6 @@ from decision_lab.market_observation import (
     load_market_observation_config,
     load_market_observation_spec,
 )
-from decision_lab.ledger import canonical_hash
 from decision_lab.scanner import ScannerConfig, SupportDirection, rank_themes
 from decision_lab.themes import (
     ThemeDefinition,
