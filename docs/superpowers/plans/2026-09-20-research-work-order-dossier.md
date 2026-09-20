@@ -410,6 +410,27 @@ def test_company_deep_dive_rejects_generic_adapter():
         )
 
 
+def test_company_policy_dimension_must_exist_on_selected_adapter():
+    record, package = _registered_archive()
+    policy = replace(
+        ResearchWorkOrderPolicy(),
+        industrials_company_dimensions=("not_a_real_dimension",),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="company requirement dimension is unsupported by adapter",
+    ):
+        build_research_work_order(
+            record,
+            "WorkTheme",
+            ResearchMode.COMPANY_DEEP_DIVE,
+            theme_package=package,
+            target_tickers=("AAA",),
+            policy=policy,
+        )
+
+
 @pytest.mark.parametrize(
     "targets",
     [
@@ -486,8 +507,10 @@ from math import isfinite
 
 from .adapters import (
     BiotechClinicalAdapter,
+    BiotechClinicalEvidence,
     CompanyEvidenceInput,
     IndustrialsInfrastructureAdapter,
+    NormalizedCompanyEvidence,
     RawFactValue,
 )
 from .evidence import EvidenceRecord
@@ -758,10 +781,31 @@ def _company_dimensions(
             "generic adapter is not eligible for company deep dive"
         )
     if adapter_name == "industrials_infrastructure":
-        return policy.industrials_company_dimensions
-    if adapter_name == "biotech_clinical":
-        return policy.biotech_company_dimensions
-    raise ValueError("unsupported company evidence adapter")
+        dimensions = policy.industrials_company_dimensions
+        allowed = {
+            field.name for field in fields(NormalizedCompanyEvidence)
+        }
+    elif adapter_name == "biotech_clinical":
+        dimensions = policy.biotech_company_dimensions
+        allowed = {
+            field.name for field in fields(BiotechClinicalEvidence)
+        }
+    else:
+        raise ValueError("unsupported company evidence adapter")
+
+    excluded = {
+        "ticker",
+        "as_of",
+        "source_coverage",
+        "provenance",
+        "raw_facts",
+    }
+    allowed -= excluded
+    if any(dimension not in allowed for dimension in dimensions):
+        raise ValueError(
+            "company requirement dimension is unsupported by adapter"
+        )
+    return dimensions
 
 
 def _build_targets(
@@ -1020,7 +1064,6 @@ git commit -m "feat: add deterministic research work orders"
   - _validate_evidence_record
   - _freeze_evidence_inputs
   - _normalize_findings
-  - _validate_finding_scope
 
 - [ ] **Step 1: Add RED evidence helpers and hash/time/scope tests**
 
@@ -3008,7 +3051,40 @@ def build_research_dossier(
     )
 ~~~
 
-Define _linkage_input_payload using only validated/canonical simple linkage asdict and hierarchical snapshot asdict so mapping insertion order cannot affect input_hash.
+Add the exact semantic input serializer:
+
+~~~python
+def _linkage_input_payload(
+    submission: CompanyLinkageSubmission,
+) -> dict[str, object]:
+    ticker = submission.ticker.strip().upper()
+    simple = (
+        None
+        if submission.linkage is None
+        else asdict(
+            _validate_simple_linkage(
+                submission.linkage,
+                ticker,
+            )
+        )
+    )
+    hierarchical = (
+        None
+        if submission.hierarchical_linkage is None
+        else asdict(
+            _snapshot_hierarchical_linkage(
+                submission.hierarchical_linkage
+            )
+        )
+    )
+    return {
+        "ticker": ticker,
+        "linkage": simple,
+        "hierarchical_linkage": hierarchical,
+    }
+~~~
+
+This serializer validates and snapshots the same semantic linkage inputs used by the dossier before hashing them.
 
 - [ ] **Step 8: Add public import RED test, then export all Increment-8 symbols**
 
