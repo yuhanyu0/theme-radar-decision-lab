@@ -393,12 +393,106 @@ def _work_order_payload_without_hash(
     return payload
 
 
+def _validate_work_order_semantics(order: ResearchWorkOrder) -> None:
+    invalid = ValueError("invalid research work order")
+    if (
+        order.schema_version != SCHEMA_VERSION
+        or not order.theme_id.strip()
+        or order.package_lineage_exactly_recoverable is not False
+        or isinstance(order.minimum_independent_sources, bool)
+        or not isinstance(order.minimum_independent_sources, int)
+        or order.minimum_independent_sources < 0
+        or isinstance(order.minimum_independent_sources_per_company, bool)
+        or not isinstance(order.minimum_independent_sources_per_company, int)
+        or order.minimum_independent_sources_per_company < 0
+    ):
+        raise invalid
+
+    if order.source_routing_intent is RoutingIntent.ORDINARY_FULL_RESEARCH:
+        if (
+            not order.source_registered
+            or order.source_allocated_tier is not ResearchTier.FULL_DECISION_RESEARCH
+            or order.source_forced_review
+            or order.authorization is not ResearchAuthorization.ALLOCATED_FULL
+            or order.research_mode is not ResearchMode.COMPANY_DEEP_DIVE
+        ):
+            raise invalid
+    elif order.source_routing_intent is RoutingIntent.FORCED_FULL_REVIEW:
+        if (
+            not order.source_registered
+            or order.source_allocated_tier is not ResearchTier.FULL_DECISION_RESEARCH
+            or not order.source_forced_review
+            or order.authorization is not ResearchAuthorization.ALLOCATED_FULL
+        ):
+            raise invalid
+    elif order.source_routing_intent is RoutingIntent.FORCED_REVIEW_UNREGISTERED:
+        if (
+            order.source_registered
+            or order.source_allocated_tier is not ResearchTier.SCAN_ONLY
+            or not order.source_forced_review
+            or order.authorization
+            is not ResearchAuthorization.UNREGISTERED_FORCED_REVIEW
+            or order.research_mode is not ResearchMode.THEME_REASSESSMENT
+        ):
+            raise invalid
+    else:
+        raise invalid
+
+    if order.source_registered:
+        if (
+            order.evidence_adapter is None
+            or order.package_version is None
+            or order.universe_version is None
+        ):
+            raise invalid
+    elif (
+        order.evidence_adapter is not None
+        or order.package_version is not None
+        or order.universe_version is not None
+    ):
+        raise invalid
+
+    target_ids = {target.ticker for target in order.targets}
+    if len(target_ids) != len(order.targets):
+        raise invalid
+
+    if order.research_mode is ResearchMode.THEME_REASSESSMENT:
+        if order.targets:
+            raise invalid
+        if any(
+            requirement.scope is not ResearchRequirementScope.THEME_EVIDENCE
+            or requirement.target_ticker is not None
+            for requirement in order.requirements
+        ):
+            raise invalid
+    elif order.research_mode is ResearchMode.COMPANY_DEEP_DIVE:
+        if (
+            not order.targets
+            or order.evidence_adapter in (None, "generic")
+            or any(
+                requirement.scope is ResearchRequirementScope.THEME_EVIDENCE
+                or requirement.target_ticker not in target_ids
+                for requirement in order.requirements
+            )
+        ):
+            raise invalid
+    else:
+        raise invalid
+
+    if order.source_forced_review:
+        if not order.contradiction_questions:
+            raise invalid
+    elif order.contradiction_questions:
+        raise invalid
+
+
 def _validate_work_order_hash(order: ResearchWorkOrder) -> None:
     if (
         canonical_hash(_work_order_payload_without_hash(order))
         != order.work_order_hash
     ):
         raise ValueError("invalid research work order")
+    _validate_work_order_semantics(order)
 
 
 def build_research_work_order(
@@ -418,6 +512,13 @@ def build_research_work_order(
 
     normalized_policy = _normalize_policy(policy)
     transition = _source_transition(source_record, theme_id)
+    if (
+        transition.routing_intent is RoutingIntent.ORDINARY_FULL_RESEARCH
+        and research_mode is not ResearchMode.COMPANY_DEEP_DIVE
+    ):
+        raise ValueError(
+            "routing state is not executable in research v0.1"
+        )
 
     eligible_full = {
         RoutingIntent.ORDINARY_FULL_RESEARCH,
@@ -1424,6 +1525,8 @@ def build_research_dossier(
     if not isinstance(closure, ResearchExecutionClosure):
         raise TypeError("unsupported research execution closure")
     evidence_as_of_dt = _parse_utc(evidence_as_of)
+    if evidence_as_of_dt < _parse_utc(work_order.source_cycle_as_of):
+        raise ValueError("evidence_as_of precedes source cycle")
 
     bindings, originals = _freeze_evidence_inputs(
         evidence_inputs,
