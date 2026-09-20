@@ -14,7 +14,7 @@ from .adapters import (
     NormalizedCompanyEvidence,
     RawFactValue,
 )
-from .evidence import EvidenceRecord
+from .evidence import SOURCE_PRIORITY, EvidenceRecord
 from .hierarchical import HierarchicalLinkageResult
 from .ledger import canonical_hash
 from .linkage import LinkageResult
@@ -152,7 +152,13 @@ def _normalize_dimensions(
     *,
     field_name: str,
 ) -> tuple[str, ...]:
+    if isinstance(values, str):
+        raise TypeError(f"{field_name} must be a sequence of strings")
+    if any(not isinstance(value, str) for value in values):
+        raise TypeError(f"{field_name} must contain strings")
     normalized = tuple(value.strip() for value in values)
+    if not normalized:
+        raise ValueError(f"{field_name} must be non-empty")
     if any(not value for value in normalized):
         raise ValueError(f"{field_name} contains blank dimension")
     if len(set(normalized)) != len(normalized):
@@ -705,6 +711,17 @@ def _validate_evidence_record(record: EvidenceRecord) -> None:
     payload["source_hash"] = None
     if canonical_hash(payload) != digest:
         raise ValueError("invalid research evidence hash")
+    if record.source_type not in SOURCE_PRIORITY:
+        raise ValueError("unsupported research evidence source_type")
+    if not isinstance(record.is_observed_fact, bool):
+        raise TypeError("is_observed_fact must be bool")
+    if (
+        not isinstance(record.source_ref, str)
+        or not record.source_ref.strip()
+    ):
+        raise ValueError(
+            "research evidence source_ref must be non-empty"
+        )
 
 
 def _freeze_evidence(
@@ -1142,12 +1159,13 @@ def _normalize_company_submissions(
                     "company raw fact is unsupported by cited evidence"
                 )
 
+        canonical_company_as_of = company_as_of.isoformat()
         normalized = _adapter_for(
             submission.adapter_name
         ).normalize(
             CompanyEvidenceInput(
                 ticker=ticker,
-                as_of=submission.as_of,
+                as_of=canonical_company_as_of,
                 raw_facts=dict(raw_facts),
                 provenance=hashes,
             )
