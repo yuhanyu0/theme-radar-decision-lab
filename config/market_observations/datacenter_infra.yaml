@@ -1,0 +1,8 @@
+version: "0.1"
+theme_id: DataCenter_Infra
+mode: basket
+benchmark: SPY
+proxies: []
+current_return_sessions: 5
+prior_return_sessions: 5
+min_basket_members: 3

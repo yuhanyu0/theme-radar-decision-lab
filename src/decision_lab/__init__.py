@@ -18,6 +18,18 @@ from .hierarchical import (
 )
 from .ledger import canonical_hash, write_immutable_json
 from .linkage import LinkageResult, leave_one_out_control, rolling_linkage
+from .market_observation import (
+    MarketBar,
+    MarketObservationBatch,
+    MarketObservationConfig,
+    MarketObservationDiagnostics,
+    MarketObservationMode,
+    MarketObservationSpec,
+    MarketObservationStatus,
+    adapt_market_observations,
+    load_market_observation_config,
+    load_market_observation_spec,
+)
 from .outcomes import evaluate_forward_outcomes, missed_upside, summarize_decisions
 from .playbooks import PlaybookRouting, route_playbooks
 from .research_budget import (
@@ -60,6 +72,13 @@ __all__ = [
     "HierarchicalLinkageResult",
     "IndustrialsInfrastructureAdapter",
     "LinkageResult",
+    "MarketBar",
+    "MarketObservationBatch",
+    "MarketObservationConfig",
+    "MarketObservationDiagnostics",
+    "MarketObservationMode",
+    "MarketObservationSpec",
+    "MarketObservationStatus",
     "NormalizedCompanyEvidence",
     "PlaybookRouting",
     "ResearchAllocation",
@@ -80,6 +99,7 @@ __all__ = [
     "ThemeScanObservation",
     "ThemeScanResult",
     "ThemeUniverse",
+    "adapt_market_observations",
     "assess_tape_state",
     "canonical_hash",
     "compile_decision",
@@ -87,6 +107,8 @@ __all__ = [
     "evidence_divergence",
     "hierarchical_linkage",
     "leave_one_out_control",
+    "load_market_observation_config",
+    "load_market_observation_spec",
     "load_research_budget_config",
     "load_scanner_config",
     "load_theme_package",
