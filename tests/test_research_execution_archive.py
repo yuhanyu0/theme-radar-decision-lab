@@ -1660,3 +1660,133 @@ def test_reader_accepts_shape_valid_evidence_payload_hash_commitment_without_raw
         loaded.dossier.evidence_bindings[0].evidence.payload_hash
         == "2" * 64
     )
+
+
+
+def test_work_order_reader_rejects_wrong_archive_category_directory(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    wrong = (
+        tmp_path
+        / "not_work_orders"
+        / "2026-09-19"
+        / f"{record.work_order_hash}.json"
+    )
+    _write_json(wrong, record)
+
+    assert not verify_research_work_order_archive(wrong)
+    with pytest.raises(
+        ValueError,
+        match="research work-order archive path mismatch",
+    ):
+        read_research_work_order_archive(wrong)
+
+
+def test_dossier_reader_rejects_wrong_archive_category_directory(tmp_path):
+    work_archive, order = _theme_work_order_archive()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    wrong = (
+        tmp_path
+        / "not_dossiers"
+        / "2026-09-19"
+        / work_archive.work_order_hash
+        / f"{record.archive_record_hash}.json"
+    )
+    _write_json(wrong, record)
+
+    assert not verify_research_dossier_archive(wrong)
+    with pytest.raises(
+        ValueError,
+        match="research dossier archive path mismatch",
+    ):
+        read_research_dossier_archive(wrong)
+
+
+def test_dossier_builder_rejects_simple_linkage_runtime_type_reader_would_reject():
+    work_archive, dossier = _company_archive_and_dossier()
+    assessment = dossier.company_assessments[0]
+    assert assessment.linkage is not None
+    bad_linkage = replace(
+        assessment.linkage,
+        window="63",
+    )
+    bad_assessment = replace(
+        assessment,
+        linkage=bad_linkage,
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        company_assessments=(bad_assessment,),
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="research linkage window must be int",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
+
+
+def test_dossier_builder_rejects_hierarchical_runtime_type_reader_would_reject():
+    work_archive, dossier = _company_archive_and_dossier(
+        hierarchical=True
+    )
+    assessment = dossier.company_assessments[0]
+    snapshot = assessment.hierarchical_linkage
+    assert snapshot is not None
+
+    bad_snapshot = replace(
+        snapshot,
+        window="63",
+        source_payload_hash="0" * 64,
+    )
+    reconstructed = HierarchicalLinkageResult(
+        target=bad_snapshot.target,
+        status=bad_snapshot.status,
+        window=bad_snapshot.window,
+        observations=bad_snapshot.observations,
+        theme_correlation=bad_snapshot.theme_correlation,
+        theme_beta=bad_snapshot.theme_beta,
+        r2=bad_snapshot.r2,
+        incremental_theme_r2=bad_snapshot.incremental_theme_r2,
+        residual_mean=bad_snapshot.residual_mean,
+        residual_vol=bad_snapshot.residual_vol,
+        circularity_warning=bad_snapshot.circularity_warning,
+        missing_controls=bad_snapshot.missing_controls,
+        coefficients=dict(bad_snapshot.coefficients),
+    )
+    bad_snapshot = replace(
+        bad_snapshot,
+        source_payload_hash=canonical_hash(
+            asdict(reconstructed)
+        ),
+    )
+    bad_assessment = replace(
+        assessment,
+        hierarchical_linkage=bad_snapshot,
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        company_assessments=(bad_assessment,),
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="research hierarchical linkage window must be int",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
