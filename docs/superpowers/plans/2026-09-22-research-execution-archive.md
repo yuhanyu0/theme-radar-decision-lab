@@ -229,10 +229,22 @@ def _replay_archive_and_order(
         )
     )
     replay_archive = build_replay_archive_record(result)
-    work_order_policy = (
+    raw_policy = (
         ResearchWorkOrderPolicy()
         if policy is None
         else policy
+    )
+    work_order_policy = replace(
+        raw_policy,
+        theme_reassessment_dimensions=tuple(
+            sorted(raw_policy.theme_reassessment_dimensions)
+        ),
+        industrials_company_dimensions=tuple(
+            sorted(raw_policy.industrials_company_dimensions)
+        ),
+        biotech_company_dimensions=tuple(
+            sorted(raw_policy.biotech_company_dimensions)
+        ),
     )
     mode = (
         ResearchMode.COMPANY_DEEP_DIVE
@@ -302,22 +314,6 @@ def test_work_order_archive_rejects_mismatched_policy():
 
 def test_work_order_archive_rejects_rehashed_false_routing_provenance():
     replay_archive, order, policy = _replay_archive_and_order()
-    tampered = replace(
-        order,
-        source_routing_intent=order.source_routing_intent.FORCED_FULL_REVIEW,
-        source_forced_review=True,
-        research_mode=ResearchMode.THEME_REASSESSMENT,
-        targets=(),
-        requirements=tuple(
-            requirement
-            for requirement in order.requirements
-            if requirement.scope.value == "THEME_EVIDENCE"
-        ),
-        contradiction_questions=(
-            "What independent evidence contradicts the current theme thesis?",
-        ),
-        work_order_hash="0" * 64,
-    )
     # Build a fully internally valid forced-review-shaped WorkOrder directly.
     # The actual source replay remains ordinary FULL.
     forced_replay, forced_order, _ = _replay_archive_and_order(
@@ -1095,6 +1091,35 @@ def test_dossier_archive_rejects_rehashed_false_company_assessment():
             work_archive,
             tampered,
         )
+
+
+
+def test_dossier_archive_rejects_rehashed_noncanonical_company_snapshot():
+    work_archive, dossier = _company_archive_and_dossier()
+    assessment = dossier.company_assessments[0]
+    snapshot = assessment.normalized_evidence
+    assert snapshot is not None
+    tampered_snapshot = replace(
+        snapshot,
+        as_of="2026-09-20T16:00:00-04:00",
+    )
+    tampered_assessment = replace(
+        assessment,
+        normalized_evidence=tampered_snapshot,
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        company_assessments=(tampered_assessment,),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="inconsistent research company assessment",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
 ```
 
 - [ ] **Step 5: Run Task-2 tests and verify RED**
@@ -1367,6 +1392,27 @@ def _validate_company_assessments(
                 snapshot.normalized_payload_hash,
                 field_name="normalized company payload hash",
             )
+            normalized_as_of = _parse_utc(snapshot.as_of)
+            if (
+                normalized_as_of.isoformat() != snapshot.as_of
+                or normalized_as_of < _parse_utc(order.source_cycle_as_of)
+                or normalized_as_of > _parse_utc(dossier.evidence_as_of)
+                or not snapshot.source_coverage
+            ):
+                raise ValueError("inconsistent research company assessment")
+            all_evidence_hashes = {
+                item.evidence.source_hash
+                for item in dossier.evidence_bindings
+            }
+            if (
+                snapshot.provenance != tuple(sorted(snapshot.provenance))
+                or len(set(snapshot.provenance)) != len(snapshot.provenance)
+                or any(
+                    digest not in all_evidence_hashes
+                    for digest in snapshot.provenance
+                )
+            ):
+                raise ValueError("inconsistent research company assessment")
             names = tuple(field.name for field in snapshot.fields)
             if (
                 names != tuple(sorted(names))
@@ -3191,6 +3237,67 @@ def test_dossier_work_order_directory_symlink_cannot_escape_root(tmp_path):
         )
 
     assert not (outside / f"{record.archive_record_hash}.json").exists()
+
+
+
+def test_work_order_cycle_directory_symlink_cannot_escape_root(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    root = tmp_path / "recomputed" / "research_execution"
+    outside = tmp_path / "outside"
+    cycle_dir = root / "work_orders" / "2026-09-19"
+    cycle_dir.parent.mkdir(parents=True)
+    outside.mkdir()
+    try:
+        cycle_dir.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    with pytest.raises(
+        ValueError,
+        match="research archive directory escapes archive root",
+    ):
+        write_research_work_order_archive(
+            record,
+            root,
+            destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
+
+    assert not (outside / f"{record.work_order_hash}.json").exists()
+
+
+def test_public_root_symlink_to_noncanonical_destination_is_rejected(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    target = tmp_path / "reports" / "research_execution"
+    target.mkdir(parents=True)
+    parent = tmp_path / "recomputed"
+    parent.mkdir()
+    link = parent / "research_execution"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    with pytest.raises(
+        ValueError,
+        match="public research archives must use recomputed/research_execution",
+    ):
+        write_research_work_order_archive(
+            record,
+            link,
+            destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
 
 
 def test_existing_archive_file_symlink_is_conflict(tmp_path):
