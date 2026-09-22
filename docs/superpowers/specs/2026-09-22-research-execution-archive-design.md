@@ -446,7 +446,15 @@ Examples not fully retained include:
 - original CompanyLinkageSubmission input object;
 - original EvidenceRecord payload content.
 
-Therefore standalone archive validation cannot independently rerun build_research_dossier from raw inputs.
+Therefore standalone archive validation cannot independently rerun build_research_dossier from raw inputs and cannot independently recompute the semantic origin of ResearchDossier.input_hash.
+
+The reader must:
+
+- require dossier.input_hash is a lowercase 64-character SHA-256 hex string;
+- preserve it exactly;
+- verify that dossier_hash commits to it as part of the complete stored Dossier payload.
+
+The reader must not claim that dossier.input_hash itself was independently regenerated from original execution inputs.
 
 This limitation is explicit.
 
@@ -466,7 +474,19 @@ The archive validator must recompute and verify from the stored Dossier:
 - contradictions_present;
 - unresolved_present;
 - company-assessment target coverage;
-- ResearchDossier.status from stored execution state where recoverable.
+- ResearchDossier.status from the stored Dossier plus embedded WorkOrder.
+
+The status is fully recoverable because the stored Dossier exposes:
+
+- evidence_bindings;
+- findings;
+- per-target normalized_evidence presence;
+- per-target linkage status;
+- independent-source counts;
+- closure;
+- satisfied/unsatisfied requirements.
+
+This archive-level recomputation does not require the original raw submission objects.
 
 It must not claim raw-evidence re-verification.
 
@@ -1634,3 +1654,19 @@ This preserves two distinct archive records when:
     but prior_dossier_archive_record_hash differs
 
 and prevents lineage from being silently collapsed by the filesystem path.
+
+
+## 126. Dossier input-hash verification boundary
+
+ResearchDossier.input_hash is a commitment created by Increment 8 from raw execution inputs that are not fully retained in the Dossier.
+
+Increment 9 verifies:
+
+    input_hash format
+    + dossier_hash commitment to input_hash
+
+but does not verify:
+
+    raw execution inputs -> input_hash
+
+A malicious actor who can replace both input_hash and recompute all enclosing semantic hashes could create a self-consistent but historically false record. Preventing that requires trusted archive provenance or retention of original inputs, which is outside Increment 9.
