@@ -1889,3 +1889,41 @@ and requires equality with:
     work_order.policy_hash
 
 Then regenerate expected requirements and minima and require exact WorkOrder equality on those policy-derived fields.
+
+
+## 135. Top-level and nested identity equality
+
+ResearchWorkOrderArchiveRecord duplicates selected nested fields for navigation.
+
+Require exact string/hash equality:
+
+    record.source_cycle_as_of
+      == record.work_order.source_cycle_as_of
+
+    record.source_replay_archive_record_hash
+      == record.work_order.source_archive_record_hash
+
+    record.source_replay_result_hash
+      == record.work_order.source_replay_result_hash
+
+    record.work_order_hash
+      == record.work_order.work_order_hash
+
+ResearchDossierArchiveRecord requires:
+
+    record.source_cycle_as_of
+      == record.dossier.source_cycle_as_of
+
+    record.evidence_as_of
+      == record.dossier.evidence_as_of
+
+    record.dossier_hash
+      == record.dossier.dossier_hash
+
+and the Dossier/embedded-WorkOrder lineage rules already defined.
+
+These duplicated fields are not alternate spellings. They must be exact copies.
+
+UTC normalization is used only for temporal ordering and path-date derivation.
+
+Any mismatch raises the relevant archive lineage/value error.
