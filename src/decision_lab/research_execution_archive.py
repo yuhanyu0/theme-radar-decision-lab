@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
+import json
 from math import isfinite
 from pathlib import Path
 
@@ -12,18 +13,25 @@ from .hierarchical import HierarchicalLinkageResult
 from .ledger import canonical_hash
 from .linkage import LinkageResult
 from .replay_archive import ReplayArchiveRecord, build_replay_archive_record
-from .replay_cohort import evaluate_replay_cohort
+from .replay_cohort import RoutingIntent, evaluate_replay_cohort
+from .research_budget import ResearchTier
 from .research_execution import (
     CompanyLinkageStatus,
     CompanyResearchAssessment,
+    FrozenResearchEvidence,
     HierarchicalLinkageSnapshot,
+    NormalizedCompanyField,
+    NormalizedCompanySnapshot,
+    ResearchAuthorization,
     ResearchDossier,
     ResearchDossierStatus,
     ResearchEvidenceBinding,
     ResearchEvidenceDirection,
     ResearchExecutionClosure,
+    ResearchFinding,
     ResearchFindingKind,
     ResearchMode,
+    ResearchTarget,
     ResearchRequirement,
     ResearchRequirementScope,
     ResearchWorkOrder,
@@ -1293,3 +1301,1349 @@ def research_dossier_archive_path(
         / record.work_order_archive.work_order_hash
         / f"{record.archive_record_hash}.json"
     )
+
+
+
+_WORK_ORDER_POLICY_FIELDS = {
+    "version",
+    "theme_reassessment_dimensions",
+    "industrials_company_dimensions",
+    "biotech_company_dimensions",
+    "minimum_independent_sources",
+    "minimum_independent_sources_per_company",
+    "require_usable_linkage_for_company",
+}
+_RESEARCH_TARGET_FIELDS = {
+    "ticker",
+    "layer",
+    "membership_state",
+    "expression_role",
+    "effective_from",
+    "effective_to",
+    "provenance",
+}
+_RESEARCH_REQUIREMENT_FIELDS = {
+    "scope",
+    "dimension",
+    "target_ticker",
+}
+_RESEARCH_WORK_ORDER_FIELDS = {
+    "schema_version",
+    "source_archive_record_hash",
+    "source_replay_result_hash",
+    "source_cycle_as_of",
+    "theme_id",
+    "source_routing_intent",
+    "source_registered",
+    "source_allocated_tier",
+    "source_forced_review",
+    "authorization",
+    "research_mode",
+    "evidence_adapter",
+    "package_version",
+    "universe_version",
+    "package_lineage_exactly_recoverable",
+    "targets",
+    "requirements",
+    "minimum_independent_sources",
+    "minimum_independent_sources_per_company",
+    "contradiction_questions",
+    "policy_hash",
+    "work_order_hash",
+}
+_WORK_ORDER_ARCHIVE_FIELDS = {
+    "schema_version",
+    "content_type",
+    "producer",
+    "source_cycle_as_of",
+    "source_replay_archive_record_hash",
+    "source_replay_result_hash",
+    "work_order_hash",
+    "work_order_policy",
+    "work_order",
+    "archive_record_hash",
+}
+_FROZEN_EVIDENCE_FIELDS = {
+    "evidence_id",
+    "source_hash",
+    "payload_hash",
+    "observed_at",
+    "retrieved_at",
+    "market_asof",
+    "ticker",
+    "theme",
+    "source_type",
+    "source_ref",
+    "fact_type",
+    "is_observed_fact",
+    "model_version",
+    "notes",
+}
+_EVIDENCE_BINDING_FIELDS = {
+    "evidence",
+    "independent",
+    "direction",
+    "dimensions",
+    "target_ticker",
+}
+_NORMALIZED_FIELD_FIELDS = {"name", "value"}
+_NORMALIZED_SNAPSHOT_FIELDS = {
+    "ticker",
+    "as_of",
+    "adapter_name",
+    "source_coverage",
+    "provenance",
+    "fields",
+    "normalized_payload_hash",
+}
+_LINKAGE_RESULT_FIELDS = {
+    "ticker",
+    "control_name",
+    "window",
+    "correlation",
+    "beta",
+    "r2",
+    "residual_mean",
+    "residual_vol",
+    "beta_stability",
+    "decoupling_score",
+    "circularity_warning",
+    "observations",
+}
+_HIERARCHICAL_SNAPSHOT_FIELDS = {
+    "target",
+    "status",
+    "window",
+    "observations",
+    "theme_correlation",
+    "theme_beta",
+    "r2",
+    "incremental_theme_r2",
+    "residual_mean",
+    "residual_vol",
+    "circularity_warning",
+    "missing_controls",
+    "coefficients",
+    "source_payload_hash",
+}
+_COMPANY_ASSESSMENT_FIELDS = {
+    "ticker",
+    "normalized_evidence",
+    "evidence_source_hashes",
+    "independent_source_count",
+    "covered_dimensions",
+    "linkage_status",
+    "linkage",
+    "hierarchical_linkage",
+    "cautions",
+}
+_RESEARCH_FINDING_FIELDS = {
+    "finding_id",
+    "kind",
+    "direction",
+    "dimension",
+    "target_ticker",
+    "statement",
+    "evidence_source_hashes",
+}
+_RESEARCH_DOSSIER_FIELDS = {
+    "schema_version",
+    "work_order_hash",
+    "source_archive_record_hash",
+    "source_cycle_as_of",
+    "theme_id",
+    "research_mode",
+    "evidence_as_of",
+    "closure",
+    "status",
+    "evidence_bindings",
+    "independent_source_count",
+    "satisfied_requirements",
+    "unsatisfied_requirements",
+    "company_assessments",
+    "findings",
+    "contradictions_present",
+    "unresolved_present",
+    "limitations",
+    "input_hash",
+    "dossier_hash",
+}
+_DOSSIER_ARCHIVE_FIELDS = {
+    "schema_version",
+    "content_type",
+    "producer",
+    "source_cycle_as_of",
+    "evidence_as_of",
+    "work_order_archive",
+    "prior_dossier_archive_record_hash",
+    "dossier_hash",
+    "dossier",
+    "archive_record_hash",
+}
+
+
+def _require_mapping(
+    value,
+    *,
+    label: str,
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{label} must be a JSON object")
+    return value
+
+
+def _require_exact_fields(
+    payload: Mapping[str, object],
+    expected: set[str],
+    *,
+    label: str,
+) -> None:
+    actual = set(payload)
+    if actual != expected:
+        raise ValueError(
+            f"{label} fields mismatch: "
+            f"missing={sorted(expected - actual)} "
+            f"extra={sorted(actual - expected)}"
+        )
+
+
+def _require_list(
+    value,
+    *,
+    field_name: str,
+) -> list:
+    if not isinstance(value, list):
+        raise TypeError(
+            f"{field_name} must be a JSON array"
+        )
+    return value
+
+
+def _require_str(
+    value,
+    *,
+    field_name: str,
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be str")
+    return value
+
+
+def _require_optional_str(
+    value,
+    *,
+    field_name: str,
+) -> str | None:
+    if value is None:
+        return None
+    return _require_str(
+        value,
+        field_name=field_name,
+    )
+
+
+def _require_bool(
+    value,
+    *,
+    field_name: str,
+) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{field_name} must be bool")
+    return value
+
+
+def _require_int(
+    value,
+    *,
+    field_name: str,
+) -> int:
+    if isinstance(value, bool) or not isinstance(
+        value,
+        int,
+    ):
+        raise TypeError(f"{field_name} must be int")
+    return value
+
+
+def _require_number_or_none(
+    value,
+    *,
+    field_name: str,
+) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(
+        value,
+        (int, float),
+    ):
+        raise TypeError(
+            f"{field_name} must be numeric or null"
+        )
+    numeric = float(value)
+    if not isfinite(numeric):
+        raise ValueError(f"{field_name} must be finite")
+    return numeric
+
+
+def _tuple_of_strings(
+    value,
+    *,
+    field_name: str,
+) -> tuple[str, ...]:
+    return tuple(
+        _require_str(
+            item,
+            field_name=field_name,
+        )
+        for item in _require_list(
+            value,
+            field_name=field_name,
+        )
+    )
+
+
+def _reject_json_constant(value: str):
+    raise ValueError(
+        f"non-finite JSON constant: {value}"
+    )
+
+
+def _decode_work_order_policy(
+    value,
+) -> ResearchWorkOrderPolicy:
+    payload = _require_mapping(
+        value,
+        label="ResearchWorkOrderPolicy",
+    )
+    _require_exact_fields(
+        payload,
+        _WORK_ORDER_POLICY_FIELDS,
+        label="ResearchWorkOrderPolicy",
+    )
+    return ResearchWorkOrderPolicy(
+        version=_require_str(
+            payload["version"],
+            field_name="version",
+        ),
+        theme_reassessment_dimensions=_tuple_of_strings(
+            payload["theme_reassessment_dimensions"],
+            field_name="theme_reassessment_dimensions",
+        ),
+        industrials_company_dimensions=_tuple_of_strings(
+            payload["industrials_company_dimensions"],
+            field_name="industrials_company_dimensions",
+        ),
+        biotech_company_dimensions=_tuple_of_strings(
+            payload["biotech_company_dimensions"],
+            field_name="biotech_company_dimensions",
+        ),
+        minimum_independent_sources=_require_int(
+            payload["minimum_independent_sources"],
+            field_name="minimum_independent_sources",
+        ),
+        minimum_independent_sources_per_company=_require_int(
+            payload[
+                "minimum_independent_sources_per_company"
+            ],
+            field_name=(
+                "minimum_independent_sources_per_company"
+            ),
+        ),
+        require_usable_linkage_for_company=_require_bool(
+            payload["require_usable_linkage_for_company"],
+            field_name="require_usable_linkage_for_company",
+        ),
+    )
+
+
+def _decode_target(value) -> ResearchTarget:
+    payload = _require_mapping(
+        value,
+        label="ResearchTarget",
+    )
+    _require_exact_fields(
+        payload,
+        _RESEARCH_TARGET_FIELDS,
+        label="ResearchTarget",
+    )
+    return ResearchTarget(
+        ticker=_require_str(
+            payload["ticker"],
+            field_name="ticker",
+        ),
+        layer=_require_str(
+            payload["layer"],
+            field_name="layer",
+        ),
+        membership_state=_require_str(
+            payload["membership_state"],
+            field_name="membership_state",
+        ),
+        expression_role=_require_str(
+            payload["expression_role"],
+            field_name="expression_role",
+        ),
+        effective_from=_require_optional_str(
+            payload["effective_from"],
+            field_name="effective_from",
+        ),
+        effective_to=_require_optional_str(
+            payload["effective_to"],
+            field_name="effective_to",
+        ),
+        provenance=_tuple_of_strings(
+            payload["provenance"],
+            field_name="provenance",
+        ),
+    )
+
+
+def _decode_requirement(
+    value,
+) -> ResearchRequirement:
+    payload = _require_mapping(
+        value,
+        label="ResearchRequirement",
+    )
+    _require_exact_fields(
+        payload,
+        _RESEARCH_REQUIREMENT_FIELDS,
+        label="ResearchRequirement",
+    )
+    return ResearchRequirement(
+        scope=ResearchRequirementScope(
+            _require_str(
+                payload["scope"],
+                field_name="scope",
+            )
+        ),
+        dimension=_require_str(
+            payload["dimension"],
+            field_name="dimension",
+        ),
+        target_ticker=_require_optional_str(
+            payload["target_ticker"],
+            field_name="target_ticker",
+        ),
+    )
+
+
+def _decode_work_order(
+    value,
+) -> ResearchWorkOrder:
+    payload = _require_mapping(
+        value,
+        label="ResearchWorkOrder",
+    )
+    _require_exact_fields(
+        payload,
+        _RESEARCH_WORK_ORDER_FIELDS,
+        label="ResearchWorkOrder",
+    )
+    return ResearchWorkOrder(
+        schema_version=_require_str(
+            payload["schema_version"],
+            field_name="schema_version",
+        ),
+        source_archive_record_hash=_require_str(
+            payload["source_archive_record_hash"],
+            field_name="source_archive_record_hash",
+        ),
+        source_replay_result_hash=_require_str(
+            payload["source_replay_result_hash"],
+            field_name="source_replay_result_hash",
+        ),
+        source_cycle_as_of=_require_str(
+            payload["source_cycle_as_of"],
+            field_name="source_cycle_as_of",
+        ),
+        theme_id=_require_str(
+            payload["theme_id"],
+            field_name="theme_id",
+        ),
+        source_routing_intent=RoutingIntent(
+            _require_str(
+                payload["source_routing_intent"],
+                field_name="source_routing_intent",
+            )
+        ),
+        source_registered=_require_bool(
+            payload["source_registered"],
+            field_name="source_registered",
+        ),
+        source_allocated_tier=ResearchTier(
+            _require_str(
+                payload["source_allocated_tier"],
+                field_name="source_allocated_tier",
+            )
+        ),
+        source_forced_review=_require_bool(
+            payload["source_forced_review"],
+            field_name="source_forced_review",
+        ),
+        authorization=ResearchAuthorization(
+            _require_str(
+                payload["authorization"],
+                field_name="authorization",
+            )
+        ),
+        research_mode=ResearchMode(
+            _require_str(
+                payload["research_mode"],
+                field_name="research_mode",
+            )
+        ),
+        evidence_adapter=_require_optional_str(
+            payload["evidence_adapter"],
+            field_name="evidence_adapter",
+        ),
+        package_version=_require_optional_str(
+            payload["package_version"],
+            field_name="package_version",
+        ),
+        universe_version=_require_optional_str(
+            payload["universe_version"],
+            field_name="universe_version",
+        ),
+        package_lineage_exactly_recoverable=_require_bool(
+            payload[
+                "package_lineage_exactly_recoverable"
+            ],
+            field_name=(
+                "package_lineage_exactly_recoverable"
+            ),
+        ),
+        targets=tuple(
+            _decode_target(item)
+            for item in _require_list(
+                payload["targets"],
+                field_name="targets",
+            )
+        ),
+        requirements=tuple(
+            _decode_requirement(item)
+            for item in _require_list(
+                payload["requirements"],
+                field_name="requirements",
+            )
+        ),
+        minimum_independent_sources=_require_int(
+            payload["minimum_independent_sources"],
+            field_name="minimum_independent_sources",
+        ),
+        minimum_independent_sources_per_company=_require_int(
+            payload[
+                "minimum_independent_sources_per_company"
+            ],
+            field_name=(
+                "minimum_independent_sources_per_company"
+            ),
+        ),
+        contradiction_questions=_tuple_of_strings(
+            payload["contradiction_questions"],
+            field_name="contradiction_questions",
+        ),
+        policy_hash=_require_str(
+            payload["policy_hash"],
+            field_name="policy_hash",
+        ),
+        work_order_hash=_require_str(
+            payload["work_order_hash"],
+            field_name="work_order_hash",
+        ),
+    )
+
+
+def _decode_work_order_archive(
+    value,
+) -> ResearchWorkOrderArchiveRecord:
+    payload = _require_mapping(
+        value,
+        label="ResearchWorkOrderArchiveRecord",
+    )
+    _require_exact_fields(
+        payload,
+        _WORK_ORDER_ARCHIVE_FIELDS,
+        label="ResearchWorkOrderArchiveRecord",
+    )
+    record = ResearchWorkOrderArchiveRecord(
+        schema_version=_require_str(
+            payload["schema_version"],
+            field_name="schema_version",
+        ),
+        content_type=_require_str(
+            payload["content_type"],
+            field_name="content_type",
+        ),
+        producer=_require_str(
+            payload["producer"],
+            field_name="producer",
+        ),
+        source_cycle_as_of=_require_str(
+            payload["source_cycle_as_of"],
+            field_name="source_cycle_as_of",
+        ),
+        source_replay_archive_record_hash=_require_str(
+            payload[
+                "source_replay_archive_record_hash"
+            ],
+            field_name=(
+                "source_replay_archive_record_hash"
+            ),
+        ),
+        source_replay_result_hash=_require_str(
+            payload["source_replay_result_hash"],
+            field_name="source_replay_result_hash",
+        ),
+        work_order_hash=_require_str(
+            payload["work_order_hash"],
+            field_name="work_order_hash",
+        ),
+        work_order_policy=_decode_work_order_policy(
+            payload["work_order_policy"]
+        ),
+        work_order=_decode_work_order(
+            payload["work_order"]
+        ),
+        archive_record_hash=_require_str(
+            payload["archive_record_hash"],
+            field_name="archive_record_hash",
+        ),
+    )
+    _validate_work_order_archive_record(record)
+    return record
+
+
+def _decode_frozen_evidence(
+    value,
+) -> FrozenResearchEvidence:
+    payload = _require_mapping(
+        value,
+        label="FrozenResearchEvidence",
+    )
+    _require_exact_fields(
+        payload,
+        _FROZEN_EVIDENCE_FIELDS,
+        label="FrozenResearchEvidence",
+    )
+    return FrozenResearchEvidence(
+        evidence_id=_require_str(
+            payload["evidence_id"],
+            field_name="evidence_id",
+        ),
+        source_hash=_require_str(
+            payload["source_hash"],
+            field_name="source_hash",
+        ),
+        payload_hash=_require_str(
+            payload["payload_hash"],
+            field_name="payload_hash",
+        ),
+        observed_at=_require_str(
+            payload["observed_at"],
+            field_name="observed_at",
+        ),
+        retrieved_at=_require_optional_str(
+            payload["retrieved_at"],
+            field_name="retrieved_at",
+        ),
+        market_asof=_require_optional_str(
+            payload["market_asof"],
+            field_name="market_asof",
+        ),
+        ticker=_require_optional_str(
+            payload["ticker"],
+            field_name="ticker",
+        ),
+        theme=_require_optional_str(
+            payload["theme"],
+            field_name="theme",
+        ),
+        source_type=_require_str(
+            payload["source_type"],
+            field_name="source_type",
+        ),
+        source_ref=_require_str(
+            payload["source_ref"],
+            field_name="source_ref",
+        ),
+        fact_type=_require_str(
+            payload["fact_type"],
+            field_name="fact_type",
+        ),
+        is_observed_fact=_require_bool(
+            payload["is_observed_fact"],
+            field_name="is_observed_fact",
+        ),
+        model_version=_require_optional_str(
+            payload["model_version"],
+            field_name="model_version",
+        ),
+        notes=_require_optional_str(
+            payload["notes"],
+            field_name="notes",
+        ),
+    )
+
+
+def _decode_evidence_binding(
+    value,
+) -> ResearchEvidenceBinding:
+    payload = _require_mapping(
+        value,
+        label="ResearchEvidenceBinding",
+    )
+    _require_exact_fields(
+        payload,
+        _EVIDENCE_BINDING_FIELDS,
+        label="ResearchEvidenceBinding",
+    )
+    return ResearchEvidenceBinding(
+        evidence=_decode_frozen_evidence(
+            payload["evidence"]
+        ),
+        independent=_require_bool(
+            payload["independent"],
+            field_name="independent",
+        ),
+        direction=ResearchEvidenceDirection(
+            _require_str(
+                payload["direction"],
+                field_name="direction",
+            )
+        ),
+        dimensions=_tuple_of_strings(
+            payload["dimensions"],
+            field_name="dimensions",
+        ),
+        target_ticker=_require_optional_str(
+            payload["target_ticker"],
+            field_name="target_ticker",
+        ),
+    )
+
+
+def _decode_normalized_field(
+    value,
+) -> NormalizedCompanyField:
+    payload = _require_mapping(
+        value,
+        label="NormalizedCompanyField",
+    )
+    _require_exact_fields(
+        payload,
+        _NORMALIZED_FIELD_FIELDS,
+        label="NormalizedCompanyField",
+    )
+    raw = payload["value"]
+    if isinstance(raw, bool) or not isinstance(
+        raw,
+        (int, float, str),
+    ):
+        raise TypeError(
+            "normalized company field value has invalid type"
+        )
+    if (
+        isinstance(raw, float)
+        and not isfinite(raw)
+    ):
+        raise ValueError(
+            "normalized company field value must be finite"
+        )
+    return NormalizedCompanyField(
+        name=_require_str(
+            payload["name"],
+            field_name="name",
+        ),
+        value=raw,
+    )
+
+
+def _decode_normalized_snapshot(
+    value,
+) -> NormalizedCompanySnapshot:
+    payload = _require_mapping(
+        value,
+        label="NormalizedCompanySnapshot",
+    )
+    _require_exact_fields(
+        payload,
+        _NORMALIZED_SNAPSHOT_FIELDS,
+        label="NormalizedCompanySnapshot",
+    )
+    return NormalizedCompanySnapshot(
+        ticker=_require_str(
+            payload["ticker"],
+            field_name="ticker",
+        ),
+        as_of=_require_str(
+            payload["as_of"],
+            field_name="as_of",
+        ),
+        adapter_name=_require_str(
+            payload["adapter_name"],
+            field_name="adapter_name",
+        ),
+        source_coverage=_require_str(
+            payload["source_coverage"],
+            field_name="source_coverage",
+        ),
+        provenance=_tuple_of_strings(
+            payload["provenance"],
+            field_name="provenance",
+        ),
+        fields=tuple(
+            _decode_normalized_field(item)
+            for item in _require_list(
+                payload["fields"],
+                field_name="fields",
+            )
+        ),
+        normalized_payload_hash=_require_str(
+            payload["normalized_payload_hash"],
+            field_name="normalized_payload_hash",
+        ),
+    )
+
+
+def _decode_linkage_result(
+    value,
+) -> LinkageResult:
+    payload = _require_mapping(
+        value,
+        label="LinkageResult",
+    )
+    _require_exact_fields(
+        payload,
+        _LINKAGE_RESULT_FIELDS,
+        label="LinkageResult",
+    )
+    return LinkageResult(
+        ticker=_require_str(
+            payload["ticker"],
+            field_name="ticker",
+        ),
+        control_name=_require_str(
+            payload["control_name"],
+            field_name="control_name",
+        ),
+        window=_require_int(
+            payload["window"],
+            field_name="window",
+        ),
+        correlation=_require_number_or_none(
+            payload["correlation"],
+            field_name="correlation",
+        ),
+        beta=_require_number_or_none(
+            payload["beta"],
+            field_name="beta",
+        ),
+        r2=_require_number_or_none(
+            payload["r2"],
+            field_name="r2",
+        ),
+        residual_mean=_require_number_or_none(
+            payload["residual_mean"],
+            field_name="residual_mean",
+        ),
+        residual_vol=_require_number_or_none(
+            payload["residual_vol"],
+            field_name="residual_vol",
+        ),
+        beta_stability=_require_number_or_none(
+            payload["beta_stability"],
+            field_name="beta_stability",
+        ),
+        decoupling_score=_require_number_or_none(
+            payload["decoupling_score"],
+            field_name="decoupling_score",
+        ),
+        circularity_warning=_require_bool(
+            payload["circularity_warning"],
+            field_name="circularity_warning",
+        ),
+        observations=_require_int(
+            payload["observations"],
+            field_name="observations",
+        ),
+    )
+
+
+def _decode_hierarchical_snapshot(
+    value,
+) -> HierarchicalLinkageSnapshot:
+    payload = _require_mapping(
+        value,
+        label="HierarchicalLinkageSnapshot",
+    )
+    _require_exact_fields(
+        payload,
+        _HIERARCHICAL_SNAPSHOT_FIELDS,
+        label="HierarchicalLinkageSnapshot",
+    )
+    coefficients: list[tuple[str, float]] = []
+    for item in _require_list(
+        payload["coefficients"],
+        field_name="coefficients",
+    ):
+        if not isinstance(item, list) or len(item) != 2:
+            raise TypeError(
+                "coefficient must be a two-item JSON array"
+            )
+        name = _require_str(
+            item[0],
+            field_name="coefficient name",
+        )
+        number = _require_number_or_none(
+            item[1],
+            field_name="coefficient value",
+        )
+        if number is None:
+            raise TypeError(
+                "coefficient value must be numeric"
+            )
+        coefficients.append((name, number))
+    return HierarchicalLinkageSnapshot(
+        target=_require_str(
+            payload["target"],
+            field_name="target",
+        ),
+        status=_require_str(
+            payload["status"],
+            field_name="status",
+        ),
+        window=_require_int(
+            payload["window"],
+            field_name="window",
+        ),
+        observations=_require_int(
+            payload["observations"],
+            field_name="observations",
+        ),
+        theme_correlation=_require_number_or_none(
+            payload["theme_correlation"],
+            field_name="theme_correlation",
+        ),
+        theme_beta=_require_number_or_none(
+            payload["theme_beta"],
+            field_name="theme_beta",
+        ),
+        r2=_require_number_or_none(
+            payload["r2"],
+            field_name="r2",
+        ),
+        incremental_theme_r2=_require_number_or_none(
+            payload["incremental_theme_r2"],
+            field_name="incremental_theme_r2",
+        ),
+        residual_mean=_require_number_or_none(
+            payload["residual_mean"],
+            field_name="residual_mean",
+        ),
+        residual_vol=_require_number_or_none(
+            payload["residual_vol"],
+            field_name="residual_vol",
+        ),
+        circularity_warning=_require_bool(
+            payload["circularity_warning"],
+            field_name="circularity_warning",
+        ),
+        missing_controls=_tuple_of_strings(
+            payload["missing_controls"],
+            field_name="missing_controls",
+        ),
+        coefficients=tuple(coefficients),
+        source_payload_hash=_require_str(
+            payload["source_payload_hash"],
+            field_name="source_payload_hash",
+        ),
+    )
+
+
+def _decode_company_assessment(
+    value,
+) -> CompanyResearchAssessment:
+    payload = _require_mapping(
+        value,
+        label="CompanyResearchAssessment",
+    )
+    _require_exact_fields(
+        payload,
+        _COMPANY_ASSESSMENT_FIELDS,
+        label="CompanyResearchAssessment",
+    )
+    normalized = payload["normalized_evidence"]
+    simple = payload["linkage"]
+    hierarchical = payload["hierarchical_linkage"]
+    return CompanyResearchAssessment(
+        ticker=_require_str(
+            payload["ticker"],
+            field_name="ticker",
+        ),
+        normalized_evidence=(
+            None
+            if normalized is None
+            else _decode_normalized_snapshot(
+                normalized
+            )
+        ),
+        evidence_source_hashes=_tuple_of_strings(
+            payload["evidence_source_hashes"],
+            field_name="evidence_source_hashes",
+        ),
+        independent_source_count=_require_int(
+            payload["independent_source_count"],
+            field_name="independent_source_count",
+        ),
+        covered_dimensions=_tuple_of_strings(
+            payload["covered_dimensions"],
+            field_name="covered_dimensions",
+        ),
+        linkage_status=CompanyLinkageStatus(
+            _require_str(
+                payload["linkage_status"],
+                field_name="linkage_status",
+            )
+        ),
+        linkage=(
+            None
+            if simple is None
+            else _decode_linkage_result(simple)
+        ),
+        hierarchical_linkage=(
+            None
+            if hierarchical is None
+            else _decode_hierarchical_snapshot(
+                hierarchical
+            )
+        ),
+        cautions=_tuple_of_strings(
+            payload["cautions"],
+            field_name="cautions",
+        ),
+    )
+
+
+def _decode_finding(
+    value,
+) -> ResearchFinding:
+    payload = _require_mapping(
+        value,
+        label="ResearchFinding",
+    )
+    _require_exact_fields(
+        payload,
+        _RESEARCH_FINDING_FIELDS,
+        label="ResearchFinding",
+    )
+    direction = payload["direction"]
+    return ResearchFinding(
+        finding_id=_require_str(
+            payload["finding_id"],
+            field_name="finding_id",
+        ),
+        kind=ResearchFindingKind(
+            _require_str(
+                payload["kind"],
+                field_name="kind",
+            )
+        ),
+        direction=(
+            None
+            if direction is None
+            else ResearchEvidenceDirection(
+                _require_str(
+                    direction,
+                    field_name="direction",
+                )
+            )
+        ),
+        dimension=_require_str(
+            payload["dimension"],
+            field_name="dimension",
+        ),
+        target_ticker=_require_optional_str(
+            payload["target_ticker"],
+            field_name="target_ticker",
+        ),
+        statement=_require_str(
+            payload["statement"],
+            field_name="statement",
+        ),
+        evidence_source_hashes=_tuple_of_strings(
+            payload["evidence_source_hashes"],
+            field_name="evidence_source_hashes",
+        ),
+    )
+
+
+def _decode_dossier(
+    value,
+) -> ResearchDossier:
+    payload = _require_mapping(
+        value,
+        label="ResearchDossier",
+    )
+    _require_exact_fields(
+        payload,
+        _RESEARCH_DOSSIER_FIELDS,
+        label="ResearchDossier",
+    )
+    return ResearchDossier(
+        schema_version=_require_str(
+            payload["schema_version"],
+            field_name="schema_version",
+        ),
+        work_order_hash=_require_str(
+            payload["work_order_hash"],
+            field_name="work_order_hash",
+        ),
+        source_archive_record_hash=_require_str(
+            payload["source_archive_record_hash"],
+            field_name="source_archive_record_hash",
+        ),
+        source_cycle_as_of=_require_str(
+            payload["source_cycle_as_of"],
+            field_name="source_cycle_as_of",
+        ),
+        theme_id=_require_str(
+            payload["theme_id"],
+            field_name="theme_id",
+        ),
+        research_mode=ResearchMode(
+            _require_str(
+                payload["research_mode"],
+                field_name="research_mode",
+            )
+        ),
+        evidence_as_of=_require_str(
+            payload["evidence_as_of"],
+            field_name="evidence_as_of",
+        ),
+        closure=ResearchExecutionClosure(
+            _require_str(
+                payload["closure"],
+                field_name="closure",
+            )
+        ),
+        status=ResearchDossierStatus(
+            _require_str(
+                payload["status"],
+                field_name="status",
+            )
+        ),
+        evidence_bindings=tuple(
+            _decode_evidence_binding(item)
+            for item in _require_list(
+                payload["evidence_bindings"],
+                field_name="evidence_bindings",
+            )
+        ),
+        independent_source_count=_require_int(
+            payload["independent_source_count"],
+            field_name="independent_source_count",
+        ),
+        satisfied_requirements=tuple(
+            _decode_requirement(item)
+            for item in _require_list(
+                payload["satisfied_requirements"],
+                field_name="satisfied_requirements",
+            )
+        ),
+        unsatisfied_requirements=tuple(
+            _decode_requirement(item)
+            for item in _require_list(
+                payload["unsatisfied_requirements"],
+                field_name="unsatisfied_requirements",
+            )
+        ),
+        company_assessments=tuple(
+            _decode_company_assessment(item)
+            for item in _require_list(
+                payload["company_assessments"],
+                field_name="company_assessments",
+            )
+        ),
+        findings=tuple(
+            _decode_finding(item)
+            for item in _require_list(
+                payload["findings"],
+                field_name="findings",
+            )
+        ),
+        contradictions_present=_require_bool(
+            payload["contradictions_present"],
+            field_name="contradictions_present",
+        ),
+        unresolved_present=_require_bool(
+            payload["unresolved_present"],
+            field_name="unresolved_present",
+        ),
+        limitations=_tuple_of_strings(
+            payload["limitations"],
+            field_name="limitations",
+        ),
+        input_hash=_require_str(
+            payload["input_hash"],
+            field_name="input_hash",
+        ),
+        dossier_hash=_require_str(
+            payload["dossier_hash"],
+            field_name="dossier_hash",
+        ),
+    )
+
+
+def _decode_dossier_archive(
+    value,
+) -> ResearchDossierArchiveRecord:
+    payload = _require_mapping(
+        value,
+        label="ResearchDossierArchiveRecord",
+    )
+    _require_exact_fields(
+        payload,
+        _DOSSIER_ARCHIVE_FIELDS,
+        label="ResearchDossierArchiveRecord",
+    )
+    record = ResearchDossierArchiveRecord(
+        schema_version=_require_str(
+            payload["schema_version"],
+            field_name="schema_version",
+        ),
+        content_type=_require_str(
+            payload["content_type"],
+            field_name="content_type",
+        ),
+        producer=_require_str(
+            payload["producer"],
+            field_name="producer",
+        ),
+        source_cycle_as_of=_require_str(
+            payload["source_cycle_as_of"],
+            field_name="source_cycle_as_of",
+        ),
+        evidence_as_of=_require_str(
+            payload["evidence_as_of"],
+            field_name="evidence_as_of",
+        ),
+        work_order_archive=_decode_work_order_archive(
+            payload["work_order_archive"]
+        ),
+        prior_dossier_archive_record_hash=_require_optional_str(
+            payload[
+                "prior_dossier_archive_record_hash"
+            ],
+            field_name=(
+                "prior_dossier_archive_record_hash"
+            ),
+        ),
+        dossier_hash=_require_str(
+            payload["dossier_hash"],
+            field_name="dossier_hash",
+        ),
+        dossier=_decode_dossier(
+            payload["dossier"]
+        ),
+        archive_record_hash=_require_str(
+            payload["archive_record_hash"],
+            field_name="archive_record_hash",
+        ),
+    )
+    _validate_dossier_archive_record(record)
+    return record
+
+
+def _load_json(path: Path):
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        parse_constant=_reject_json_constant,
+    )
+
+
+def read_research_work_order_archive(
+    path: str | Path,
+) -> ResearchWorkOrderArchiveRecord:
+    target = Path(path)
+    record = _decode_work_order_archive(
+        _load_json(target)
+    )
+    if (
+        target.name
+        != f"{record.work_order_hash}.json"
+    ):
+        raise ValueError(
+            "research work-order archive filename mismatch"
+        )
+    if (
+        target.parent.name
+        != _cycle_date(record.source_cycle_as_of)
+    ):
+        raise ValueError(
+            "research archive cycle directory mismatch"
+        )
+    return record
+
+
+def read_research_dossier_archive(
+    path: str | Path,
+) -> ResearchDossierArchiveRecord:
+    target = Path(path)
+    record = _decode_dossier_archive(
+        _load_json(target)
+    )
+    if (
+        target.name
+        != f"{record.archive_record_hash}.json"
+    ):
+        raise ValueError(
+            "research dossier archive filename mismatch"
+        )
+    if (
+        target.parent.name
+        != record.work_order_archive.work_order_hash
+    ):
+        raise ValueError(
+            "research dossier work-order directory mismatch"
+        )
+    if (
+        target.parent.parent.name
+        != _cycle_date(record.source_cycle_as_of)
+    ):
+        raise ValueError(
+            "research archive cycle directory mismatch"
+        )
+    return record
+
+
+def verify_research_work_order_archive(
+    path: str | Path,
+) -> bool:
+    try:
+        read_research_work_order_archive(path)
+    except FileNotFoundError:
+        return False
+    except (
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return False
+    return True
+
+
+def verify_research_dossier_archive(
+    path: str | Path,
+) -> bool:
+    try:
+        read_research_dossier_archive(path)
+    except FileNotFoundError:
+        return False
+    except (
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return False
+    return True
