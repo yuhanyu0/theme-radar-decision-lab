@@ -753,8 +753,8 @@ def _validate_company_assessments(
                 raise ValueError(
                     "inconsistent research company assessment"
                 )
-            all_evidence_hashes = {
-                item.evidence.source_hash
+            evidence_by_hash = {
+                item.evidence.source_hash: item.evidence
                 for item in dossier.evidence_bindings
             }
             if (
@@ -763,7 +763,12 @@ def _validate_company_assessments(
                 or len(set(snapshot.provenance))
                 != len(snapshot.provenance)
                 or any(
-                    digest not in all_evidence_hashes
+                    digest not in evidence_by_hash
+                    for digest in snapshot.provenance
+                )
+                or any(
+                    evidence_by_hash[digest].ticker
+                    not in (None, assessment.ticker)
                     for digest in snapshot.provenance
                 )
             ):
