@@ -145,7 +145,7 @@ Canonical Dossier path:
       dossiers/
         <source-cycle-UTC-date>/
           <work_order_hash>/
-            <dossier_hash>.json
+            <archive_record_hash>.json
 
 All dossier snapshots for one WorkOrder remain grouped under the source replay cycle and WorkOrder hash.
 
@@ -701,7 +701,15 @@ Mismatch:
 
 Dossier archive filename must be:
 
-    <dossier_hash>.json
+    <archive_record_hash>.json
+
+not dossier_hash.
+
+Reason:
+
+    prior_dossier_archive_record_hash
+
+is part of archive semantics but not part of ResearchDossier.dossier_hash. Two archive records may therefore contain the same Dossier snapshot while committing to different parent lineage. Using dossier_hash as the filename would create a false path collision.
 
 Mismatch:
 
@@ -711,7 +719,7 @@ Mismatch:
 
 For Dossier archive path:
 
-    .../<source-cycle-date>/<work_order_hash>/<dossier_hash>.json
+    .../<source-cycle-date>/<work_order_hash>/<archive_record_hash>.json
 
 The immediate parent directory must equal:
 
@@ -1300,13 +1308,13 @@ No canonical child is selected.
 
 ## 100. Dossier path acceptance
 
-For source cycle date D, WorkOrder hash W, Dossier hash H:
+For source cycle date D, WorkOrder hash W, archive-record hash A:
 
     research_dossier_archive_path(...)
 
 ends:
 
-    dossiers/D/W/H.json
+    dossiers/D/W/A.json
 
 ## 101. Dossier round-trip acceptance
 
@@ -1322,7 +1330,7 @@ Second identical write:
 
 Place valid dossier file under:
 
-    dossiers/D/OTHER/H.json
+    dossiers/D/OTHER/A.json
 
 Reader rejects:
 
@@ -1330,7 +1338,7 @@ Reader rejects:
 
 ## 103. Dossier wrong filename acceptance
 
-Place under correct WorkOrder directory but wrong filename:
+Place under correct WorkOrder directory but a filename not equal to archive_record_hash:
 
     research dossier archive filename mismatch
 
@@ -1606,3 +1614,23 @@ with:
 - no Decision/Tape/Playbook integration;
 - all existing tests green;
 - changed-files Ruff green.
+
+
+## 125. Dossier path identity includes lineage
+
+ResearchDossier.dossier_hash identifies the Dossier snapshot itself.
+
+ResearchDossierArchiveRecord.archive_record_hash identifies:
+
+    Dossier snapshot
+    + embedded WorkOrder archive
+    + optional parent lineage
+
+Therefore Dossier archive file identity uses archive_record_hash.
+
+This preserves two distinct archive records when:
+
+    dossier_hash is equal
+    but prior_dossier_archive_record_hash differs
+
+and prevents lineage from being silently collapsed by the filesystem path.
