@@ -1021,6 +1021,30 @@ def test_dossier_parent_must_be_strictly_earlier(child_time):
             child_dossier,
             prior_dossier_archive=parent,
         )
+
+
+
+def test_dossier_parent_must_match_exact_work_order_archive():
+    theme_work_archive, theme_order = _theme_work_order_archive()
+    company_work_archive, company_dossier = _company_archive_and_dossier()
+    company_parent = build_research_dossier_archive_record(
+        company_work_archive,
+        company_dossier,
+    )
+    child_dossier = _theme_dossier(
+        theme_order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="research dossier parent work order mismatch",
+    ):
+        build_research_dossier_archive_record(
+            theme_work_archive,
+            child_dossier,
+            prior_dossier_archive=company_parent,
+        )
 ```
 
 - [ ] **Step 3: Add RED non-monotonic/fork/archive-identity tests**
@@ -1066,6 +1090,33 @@ def test_dossier_archive_allows_complete_to_partial_and_forks():
         partial_b.prior_dossier_archive_record_hash
         == complete.archive_record_hash
     )
+
+
+
+def test_dossier_archive_allows_later_evidence_retraction():
+    work_archive, order = _theme_work_order_archive()
+    complete = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+            include_all_requirements=True,
+        ),
+    )
+    empty_dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        closure=ResearchExecutionClosure.OPEN,
+    )
+    child = build_research_dossier_archive_record(
+        work_archive,
+        empty_dossier,
+        prior_dossier_archive=complete,
+    )
+
+    assert complete.dossier.evidence_bindings
+    assert child.dossier.evidence_bindings == ()
+    assert child.dossier.status is ResearchDossierStatus.NOT_STARTED
 
 
 def test_same_dossier_with_different_parent_lineage_has_distinct_archive_identity(tmp_path):
@@ -2092,6 +2143,29 @@ def test_work_order_reader_rejects_wrong_filename(tmp_path):
     with pytest.raises(
         ValueError,
         match="research work-order archive filename mismatch",
+    ):
+        read_research_work_order_archive(path)
+
+
+
+def test_work_order_reader_rejects_wrong_cycle_directory(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    path = (
+        tmp_path
+        / "work_orders"
+        / "2026-09-18"
+        / f"{record.work_order_hash}.json"
+    )
+    _write_json(path, record)
+
+    with pytest.raises(
+        ValueError,
+        match="research archive cycle directory mismatch",
     ):
         read_research_work_order_archive(path)
 
@@ -3216,6 +3290,34 @@ def test_dossier_write_round_trip_uses_archive_hash_filename(tmp_path):
     assert written.created
     assert written.path.name == f"{record.archive_record_hash}.json"
     assert read_research_dossier_archive(written.path) == record
+
+
+
+def test_dossier_second_identical_write_is_idempotent(tmp_path):
+    work_archive, order = _theme_work_order_archive()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    root = tmp_path / "private-research"
+
+    first = write_research_dossier_archive(
+        record,
+        root,
+        destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+    )
+    second = write_research_dossier_archive(
+        record,
+        root,
+        destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+    )
+
+    assert first.created
+    assert not second.created
+    assert first.path == second.path
 ```
 
 - [ ] **Step 2: Add RED conflict/invalid-existing/ledger-live/root tests**
@@ -3887,6 +3989,62 @@ def test_reader_accepts_shape_valid_input_hash_without_claiming_raw_recompute(tm
     loaded = read_research_dossier_archive(path)
 
     assert loaded.dossier.input_hash == replacement_input_hash
+
+
+
+def test_reader_accepts_shape_valid_evidence_payload_hash_commitment_without_raw_payload(tmp_path):
+    work_archive, order = _theme_work_order_archive()
+    dossier = _theme_dossier(
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+    )
+    binding = dossier.evidence_bindings[0]
+    altered_evidence = replace(
+        binding.evidence,
+        payload_hash="2" * 64,
+    )
+    altered_binding = replace(
+        binding,
+        evidence=altered_evidence,
+    )
+    altered = replace(
+        dossier,
+        evidence_bindings=(altered_binding,),
+        dossier_hash="0" * 64,
+    )
+    semantic = asdict(altered)
+    semantic.pop("dossier_hash")
+    altered = replace(
+        altered,
+        dossier_hash=canonical_hash(semantic),
+    )
+    seed = ResearchDossierArchiveRecord(
+        schema_version="0.1",
+        content_type="research_dossier",
+        producer="theme-radar-decision-lab/research-execution-archive@0.1",
+        source_cycle_as_of=altered.source_cycle_as_of,
+        evidence_as_of=altered.evidence_as_of,
+        work_order_archive=work_archive,
+        prior_dossier_archive_record_hash=None,
+        dossier_hash=altered.dossier_hash,
+        dossier=altered,
+        archive_record_hash="0" * 64,
+    )
+    archive_payload = asdict(seed)
+    archive_payload.pop("archive_record_hash")
+    record = replace(
+        seed,
+        archive_record_hash=canonical_hash(archive_payload),
+    )
+    path = research_dossier_archive_path(record, tmp_path)
+    _write_json(path, record)
+
+    loaded = read_research_dossier_archive(path)
+
+    assert (
+        loaded.dossier.evidence_bindings[0].evidence.payload_hash
+        == "2" * 64
+    )
 ```
 
 The last test intentionally pins the documented limitation: archive integrity cannot reconstruct omitted raw execution inputs.
