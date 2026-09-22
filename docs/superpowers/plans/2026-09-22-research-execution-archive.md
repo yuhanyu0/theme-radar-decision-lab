@@ -1352,6 +1352,8 @@ def _validate_frozen_evidence(
         raise TypeError("research evidence is_observed_fact must be bool")
     if not isinstance(binding.independent, bool):
         raise TypeError("research evidence independent must be bool")
+    if not isinstance(binding.direction, ResearchEvidenceDirection):
+        raise TypeError("research evidence direction must be ResearchEvidenceDirection")
     if (
         binding.independent
         and (
@@ -1622,6 +1624,18 @@ def _validate_findings(
     seen = set()
     targets = {target.ticker for target in order.targets}
     for finding in dossier.findings:
+        if not isinstance(finding.kind, ResearchFindingKind):
+            raise TypeError("research finding kind must be ResearchFindingKind")
+        if (
+            finding.direction is not None
+            and not isinstance(
+                finding.direction,
+                ResearchEvidenceDirection,
+            )
+        ):
+            raise TypeError(
+                "research finding direction must be ResearchEvidenceDirection"
+            )
         if (
             not finding.finding_id
             or finding.finding_id != finding.finding_id.strip()
@@ -1767,6 +1781,12 @@ def _validate_dossier(
     *,
     order: ResearchWorkOrder,
 ) -> None:
+    if not isinstance(dossier.closure, ResearchExecutionClosure):
+        raise TypeError("research dossier closure must be ResearchExecutionClosure")
+    if not isinstance(dossier.status, ResearchDossierStatus):
+        raise TypeError("research dossier status must be ResearchDossierStatus")
+    if not isinstance(dossier.research_mode, ResearchMode):
+        raise TypeError("research dossier mode must be ResearchMode")
     if (
         dossier.schema_version != "0.1"
         or dossier.work_order_hash != order.work_order_hash
