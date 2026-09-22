@@ -1790,3 +1790,94 @@ def test_dossier_builder_rejects_hierarchical_runtime_type_reader_would_reject()
             work_archive,
             tampered,
         )
+
+
+
+def test_work_order_reader_rejects_wrong_archive_type_directory(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    path = (
+        tmp_path
+        / "not_work_orders"
+        / "2026-09-19"
+        / f"{record.work_order_hash}.json"
+    )
+    _write_json(path, record)
+
+    with pytest.raises(
+        ValueError,
+        match="research work-order archive type directory mismatch",
+    ):
+        read_research_work_order_archive(path)
+
+
+def test_dossier_reader_rejects_wrong_archive_type_directory(tmp_path):
+    work_archive, order = _theme_work_order_archive()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    path = (
+        tmp_path
+        / "not_dossiers"
+        / "2026-09-19"
+        / work_archive.work_order_hash
+        / f"{record.archive_record_hash}.json"
+    )
+    _write_json(path, record)
+
+    with pytest.raises(
+        ValueError,
+        match="research dossier archive type directory mismatch",
+    ):
+        read_research_dossier_archive(path)
+
+
+def test_dossier_archive_rejects_rehashed_conflicting_source_metadata():
+    work_archive, order = _theme_work_order_archive()
+    dossier = _theme_dossier(
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+    )
+    first = dossier.evidence_bindings[0]
+    second_evidence = replace(
+        first.evidence,
+        source_hash="3" * 64,
+        source_type="company_ir",
+    )
+    second = replace(
+        first,
+        evidence=second_evidence,
+    )
+    bindings = tuple(
+        sorted(
+            (first, second),
+            key=lambda item: (
+                item.evidence.source_hash,
+                item.target_ticker or "",
+                item.direction.value,
+                item.dimensions,
+            ),
+        )
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        evidence_bindings=bindings,
+        independent_source_count=1,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="conflicting research source metadata",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
