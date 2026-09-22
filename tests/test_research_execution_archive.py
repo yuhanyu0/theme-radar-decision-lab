@@ -1453,3 +1453,26 @@ def test_partial_new_research_archive_file_is_removed_on_write_failure(
         root,
     ).exists()
     monkeypatch.setattr(os, "fdopen", real_fdopen)
+
+
+
+def test_research_execution_archive_interfaces_are_publicly_importable():
+    import decision_lab
+
+    for name in (
+        "ResearchArchiveDestinationVisibility",
+        "ResearchArchiveWriteResult",
+        "ResearchWorkOrderArchiveRecord",
+        "ResearchDossierArchiveRecord",
+        "build_research_work_order_archive_record",
+        "build_research_dossier_archive_record",
+        "research_work_order_archive_path",
+        "research_dossier_archive_path",
+        "read_research_work_order_archive",
+        "read_research_dossier_archive",
+        "verify_research_work_order_archive",
+        "verify_research_dossier_archive",
+        "write_research_work_order_archive",
+        "write_research_dossier_archive",
+    ):
+        assert getattr(decision_lab, name) is not None
