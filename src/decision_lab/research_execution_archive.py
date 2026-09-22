@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
-import json
-import os
 from math import isfinite
 from pathlib import Path
 
@@ -17,6 +17,8 @@ from .replay_archive import ReplayArchiveRecord, build_replay_archive_record
 from .replay_cohort import RoutingIntent, evaluate_replay_cohort
 from .research_budget import ResearchTier
 from .research_execution import (
+    _CONTRADICTION_QUESTIONS,
+    _DOSSIER_LIMITATIONS,
     CompanyLinkageStatus,
     CompanyResearchAssessment,
     FrozenResearchEvidence,
@@ -32,15 +34,13 @@ from .research_execution import (
     ResearchFinding,
     ResearchFindingKind,
     ResearchMode,
-    ResearchTarget,
     ResearchRequirement,
     ResearchRequirementScope,
+    ResearchTarget,
     ResearchWorkOrder,
     ResearchWorkOrderPolicy,
-    _DOSSIER_LIMITATIONS,
-    _linkage_status,
-    _CONTRADICTION_QUESTIONS,
     _build_requirements,
+    _linkage_status,
     _normalize_policy,
     _validate_work_order_hash,
 )
