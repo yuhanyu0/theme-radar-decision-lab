@@ -2,7 +2,10 @@ from dataclasses import asdict, replace
 
 import pytest
 
+from decision_lab.evidence import EvidenceRecord
+from decision_lab.hierarchical import HierarchicalLinkageResult
 from decision_lab.ledger import canonical_hash
+from decision_lab.linkage import LinkageResult
 from decision_lab.market_observation import (
     MarketBar,
     MarketObservationConfig,
@@ -13,13 +16,23 @@ from decision_lab.replay import ReplayCycleInput, ThemeReplayInput, run_replay_c
 from decision_lab.replay_archive import build_replay_archive_record
 from decision_lab.research_budget import ResearchBudgetConfig
 from decision_lab.research_execution import (
+    CompanyLinkageSubmission,
+    CompanyResearchSubmission,
+    ResearchDossierStatus,
+    ResearchEvidenceDirection,
+    ResearchEvidenceInput,
+    ResearchExecutionClosure,
     ResearchMode,
     ResearchWorkOrderPolicy,
+    build_research_dossier,
     build_research_work_order,
 )
 from decision_lab.research_execution_archive import (
+    ResearchDossierArchiveRecord,
     ResearchWorkOrderArchiveRecord,
+    build_research_dossier_archive_record,
     build_research_work_order_archive_record,
+    research_dossier_archive_path,
     research_work_order_archive_path,
 )
 from decision_lab.scanner import (
@@ -307,3 +320,471 @@ def test_work_order_archive_path_uses_source_cycle_and_work_order_hash(tmp_path)
         / f"{order.work_order_hash}.json"
     )
     assert not root.exists()
+
+
+
+def _hashed_evidence(
+    *,
+    evidence_id,
+    source_ref,
+    payload,
+    theme="ArchiveResearchTheme",
+    ticker=None,
+    source_type="official_macro",
+):
+    raw = EvidenceRecord(
+        evidence_id=evidence_id,
+        observed_at="2026-09-20T12:00:00+00:00",
+        retrieved_at="2026-09-20T13:00:00+00:00",
+        market_asof=None,
+        ticker=ticker,
+        theme=theme,
+        source_type=source_type,
+        source_ref=source_ref,
+        fact_type="archive_research_fact",
+        payload=dict(payload),
+        is_observed_fact=True,
+    )
+    return raw.with_hash()
+
+
+def _theme_work_order_archive():
+    replay_archive, order, policy = _replay_archive_and_order(
+        direction=SupportDirection.CONTRADICTING,
+        policy=replace(
+            ResearchWorkOrderPolicy(),
+            minimum_independent_sources=1,
+        ),
+    )
+    archive = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    return archive, order
+
+
+def _theme_dossier(
+    order,
+    *,
+    evidence_as_of,
+    closure=ResearchExecutionClosure.OPEN,
+    include_all_requirements=True,
+):
+    evidence = _hashed_evidence(
+        evidence_id=f"ev:{evidence_as_of}",
+        source_ref=f"official:{evidence_as_of}",
+        payload={"state": evidence_as_of},
+    )
+    dimensions = (
+        tuple(item.dimension for item in order.requirements)
+        if include_all_requirements
+        else (order.requirements[0].dimension,)
+    )
+    return build_research_dossier(
+        order,
+        evidence_as_of=evidence_as_of,
+        closure=closure,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=ResearchEvidenceDirection.CONTRADICTING,
+                dimensions=dimensions,
+                target_ticker=None,
+            ),
+        ),
+    )
+
+
+def _company_archive_and_dossier(*, hierarchical=False):
+    replay_archive, order, policy = _replay_archive_and_order(
+        policy=replace(
+            ResearchWorkOrderPolicy(),
+            industrials_company_dimensions=("growth",),
+            minimum_independent_sources=1,
+            minimum_independent_sources_per_company=1,
+        )
+    )
+    work_archive = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    evidence = _hashed_evidence(
+        evidence_id="ev:AAA",
+        source_ref="sec:AAA",
+        payload={"revenue_growth": 0.2},
+        ticker="AAA",
+        source_type="sec_filing",
+    )
+    linkage = LinkageResult(
+        ticker="AAA",
+        control_name="theme-minus-AAA",
+        window=63,
+        correlation=0.6,
+        beta=0.9,
+        r2=0.4,
+        residual_mean=0.0,
+        residual_vol=0.02,
+        beta_stability=0.8,
+        decoupling_score=0.3,
+        circularity_warning=False,
+        observations=63,
+    )
+    hierarchical_linkage = HierarchicalLinkageResult(
+        target="AAA",
+        status="ok",
+        window=63,
+        observations=63,
+        theme_correlation=0.6,
+        theme_beta=0.7,
+        r2=0.5,
+        incremental_theme_r2=0.2,
+        residual_mean=0.0,
+        residual_vol=0.02,
+        circularity_warning=False,
+        missing_controls=(),
+        coefficients={"SPY": 0.3, "ArchiveResearchTheme": 0.7},
+    )
+    linkage_submission = (
+        CompanyLinkageSubmission(
+            ticker="AAA",
+            hierarchical_linkage=hierarchical_linkage,
+        )
+        if hierarchical
+        else CompanyLinkageSubmission(
+            ticker="AAA",
+            linkage=linkage,
+        )
+    )
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T23:00:00+00:00",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=ResearchEvidenceDirection.SUPPORTING,
+                dimensions=("growth",),
+                target_ticker="AAA",
+            ),
+        ),
+        company_submissions=(
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of="2026-09-20T20:00:00+00:00",
+                adapter_name="industrials_infrastructure",
+                raw_facts={"revenue_growth": 0.2},
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        ),
+        linkage_submissions=(linkage_submission,),
+    )
+    assert dossier.status is ResearchDossierStatus.COMPLETE
+    return work_archive, dossier
+
+
+def test_dossier_archive_root_and_child_preserve_explicit_lineage():
+    work_archive, order = _theme_work_order_archive()
+    root_dossier = _theme_dossier(
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        include_all_requirements=False,
+    )
+    root = build_research_dossier_archive_record(
+        work_archive,
+        root_dossier,
+    )
+    child_dossier = _theme_dossier(
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        include_all_requirements=True,
+    )
+    child = build_research_dossier_archive_record(
+        work_archive,
+        child_dossier,
+        prior_dossier_archive=root,
+    )
+
+    assert isinstance(root, ResearchDossierArchiveRecord)
+    assert root.prior_dossier_archive_record_hash is None
+    assert (
+        child.prior_dossier_archive_record_hash
+        == root.archive_record_hash
+    )
+    assert child.work_order_archive == work_archive
+    assert child.dossier_hash == child_dossier.dossier_hash
+
+
+@pytest.mark.parametrize(
+    "child_time",
+    [
+        "2026-09-20T20:00:00+00:00",
+        "2026-09-20T16:00:00-04:00",
+        "2026-09-20T19:59:59+00:00",
+    ],
+)
+def test_dossier_parent_must_be_strictly_earlier(child_time):
+    work_archive, order = _theme_work_order_archive()
+    parent = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    child_dossier = _theme_dossier(
+        order,
+        evidence_as_of=child_time,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="research dossier parent must be strictly earlier",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            child_dossier,
+            prior_dossier_archive=parent,
+        )
+
+
+def test_dossier_parent_must_match_exact_work_order_archive():
+    theme_work_archive, theme_order = _theme_work_order_archive()
+    company_work_archive, company_dossier = _company_archive_and_dossier()
+    company_parent = build_research_dossier_archive_record(
+        company_work_archive,
+        company_dossier,
+    )
+    child_dossier = _theme_dossier(
+        theme_order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="research dossier parent work order mismatch",
+    ):
+        build_research_dossier_archive_record(
+            theme_work_archive,
+            child_dossier,
+            prior_dossier_archive=company_parent,
+        )
+
+
+def test_dossier_archive_allows_complete_to_partial_and_forks():
+    work_archive, order = _theme_work_order_archive()
+    complete = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+            include_all_requirements=True,
+        ),
+    )
+    partial_a = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-21T20:00:00+00:00",
+            include_all_requirements=False,
+        ),
+        prior_dossier_archive=complete,
+    )
+    partial_b = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-22T20:00:00+00:00",
+            include_all_requirements=False,
+        ),
+        prior_dossier_archive=complete,
+    )
+
+    assert complete.dossier.status is ResearchDossierStatus.COMPLETE
+    assert partial_a.dossier.status is ResearchDossierStatus.PARTIAL
+    assert partial_b.dossier.status is ResearchDossierStatus.PARTIAL
+    assert (
+        partial_a.prior_dossier_archive_record_hash
+        == complete.archive_record_hash
+    )
+    assert (
+        partial_b.prior_dossier_archive_record_hash
+        == complete.archive_record_hash
+    )
+
+
+def test_dossier_archive_allows_later_evidence_retraction():
+    work_archive, order = _theme_work_order_archive()
+    complete = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+            include_all_requirements=True,
+        ),
+    )
+    empty_dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        closure=ResearchExecutionClosure.OPEN,
+    )
+    child = build_research_dossier_archive_record(
+        work_archive,
+        empty_dossier,
+        prior_dossier_archive=complete,
+    )
+
+    assert complete.dossier.evidence_bindings
+    assert child.dossier.evidence_bindings == ()
+    assert child.dossier.status is ResearchDossierStatus.NOT_STARTED
+
+
+def test_same_dossier_with_different_parent_lineage_has_distinct_archive_identity(
+    tmp_path,
+):
+    work_archive, order = _theme_work_order_archive()
+    parent_a = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T18:00:00+00:00",
+        ),
+    )
+    parent_b = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T19:00:00+00:00",
+        ),
+    )
+    dossier = _theme_dossier(
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+    )
+    first = build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+        prior_dossier_archive=parent_a,
+    )
+    second = build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+        prior_dossier_archive=parent_b,
+    )
+
+    assert first.dossier_hash == second.dossier_hash
+    assert first.archive_record_hash != second.archive_record_hash
+    first_path = research_dossier_archive_path(first, tmp_path)
+    second_path = research_dossier_archive_path(second, tmp_path)
+    assert first_path != second_path
+    assert first_path.name == f"{first.archive_record_hash}.json"
+    assert second_path.name == f"{second.archive_record_hash}.json"
+
+
+def _rehash_dossier(dossier, **changes):
+    seed = replace(
+        dossier,
+        **changes,
+        dossier_hash="0" * 64,
+    )
+    payload = asdict(seed)
+    payload.pop("dossier_hash")
+    return replace(seed, dossier_hash=canonical_hash(payload))
+
+
+def test_dossier_archive_rejects_rehashed_false_requirement_partition():
+    work_archive, dossier = _company_archive_and_dossier()
+    tampered = _rehash_dossier(
+        dossier,
+        satisfied_requirements=(),
+        unsatisfied_requirements=dossier.satisfied_requirements,
+    )
+
+    with pytest.raises(ValueError):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
+
+
+def test_dossier_archive_rejects_rehashed_false_company_assessment():
+    work_archive, dossier = _company_archive_and_dossier()
+    assessment = dossier.company_assessments[0]
+    tampered_assessment = replace(
+        assessment,
+        independent_source_count=99,
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        company_assessments=(tampered_assessment,),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="inconsistent research company assessment",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
+
+
+def test_dossier_archive_rejects_rehashed_noncanonical_company_snapshot():
+    work_archive, dossier = _company_archive_and_dossier()
+    assessment = dossier.company_assessments[0]
+    snapshot = assessment.normalized_evidence
+    assert snapshot is not None
+    tampered_snapshot = replace(
+        snapshot,
+        as_of="2026-09-20T16:00:00-04:00",
+    )
+    tampered_assessment = replace(
+        assessment,
+        normalized_evidence=tampered_snapshot,
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        company_assessments=(tampered_assessment,),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="inconsistent research company assessment",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
+
+
+def test_dossier_archive_rejects_rehashed_hierarchical_source_payload_hash():
+    work_archive, dossier = _company_archive_and_dossier(
+        hierarchical=True
+    )
+    assessment = dossier.company_assessments[0]
+    snapshot = assessment.hierarchical_linkage
+    assert snapshot is not None
+    tampered_snapshot = replace(
+        snapshot,
+        source_payload_hash="1" * 64,
+    )
+    tampered_assessment = replace(
+        assessment,
+        hierarchical_linkage=tampered_snapshot,
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        company_assessments=(tampered_assessment,),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="hierarchical linkage source payload hash mismatch",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
