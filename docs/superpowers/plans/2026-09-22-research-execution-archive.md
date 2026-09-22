@@ -312,6 +312,34 @@ def test_work_order_archive_rejects_mismatched_policy():
         )
 
 
+
+def test_work_order_archive_rejects_rehashed_changed_contradiction_questions():
+    replay_archive, order, policy = _replay_archive_and_order(
+        direction=SupportDirection.CONTRADICTING
+    )
+    seed = replace(
+        order,
+        contradiction_questions=("changed research question",),
+        work_order_hash="0" * 64,
+    )
+    payload = asdict(seed)
+    payload.pop("work_order_hash")
+    tampered = replace(
+        seed,
+        work_order_hash=canonical_hash(payload),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="invalid research work order",
+    ):
+        build_research_work_order_archive_record(
+            replay_archive,
+            tampered,
+            work_order_policy=policy,
+        )
+
+
 def test_work_order_archive_rejects_rehashed_false_routing_provenance():
     replay_archive, order, policy = _replay_archive_and_order()
     # Build a fully internally valid forced-review-shaped WorkOrder directly.
@@ -420,6 +448,7 @@ from .research_execution import (
     ResearchRequirementScope,
     ResearchWorkOrder,
     ResearchWorkOrderPolicy,
+    _CONTRADICTION_QUESTIONS,
     _build_requirements,
     _normalize_policy,
     _validate_work_order_hash,
@@ -498,6 +527,26 @@ def _validate_work_order_policy(
         _validate_work_order_hash(order)
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid research work order") from exc
+
+    if (
+        order.targets
+        != tuple(sorted(order.targets, key=lambda item: item.ticker))
+        or any(
+            not target.ticker
+            or target.ticker != target.ticker.upper()
+            for target in order.targets
+        )
+        or (
+            order.source_forced_review
+            and order.contradiction_questions
+            != _CONTRADICTION_QUESTIONS
+        )
+        or (
+            not order.source_forced_review
+            and order.contradiction_questions
+        )
+    ):
+        raise ValueError("invalid research work order")
 
     if canonical_hash(asdict(normalized)) != order.policy_hash:
         raise ValueError("research work order policy mismatch")
@@ -3514,7 +3563,7 @@ def _write_archive_record(
     try:
         fd = os.open(path, flags, 0o644)
     except FileExistsError:
-        if path.is_symlink():
+        if path.is_symlink() or path.is_dir():
             raise FileExistsError(
                 "research archive path conflict"
             ) from None
