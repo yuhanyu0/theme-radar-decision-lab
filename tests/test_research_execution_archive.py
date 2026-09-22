@@ -1881,3 +1881,155 @@ def test_dossier_archive_rejects_rehashed_conflicting_source_metadata():
             work_archive,
             tampered,
         )
+
+
+
+def test_dossier_archive_rejects_cross_target_normalized_provenance():
+    package = _package()
+    package.universe.add_candidate(
+        Candidate(
+            ticker="BBB",
+            theme="ArchiveResearchTheme",
+            layer="primary",
+            effective_from="2026-01-01",
+            provenance=("fixture:BBB",),
+        )
+    )
+    result = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(
+                ThemeReplayInput(
+                    package=package,
+                    market_spec=MarketObservationSpec(
+                        theme_id="ArchiveResearchTheme",
+                        mode=MarketObservationMode.BASKET,
+                        benchmark="SPY",
+                        current_return_sessions=1,
+                        prior_return_sessions=1,
+                        min_basket_members=1,
+                        version="archive-test",
+                    ),
+                    market_config=MarketObservationConfig(),
+                    bars=(
+                        MarketBar(
+                            symbol="SPY",
+                            session_date="2026-09-19",
+                            available_at="2026-09-19T21:00:00+00:00",
+                            close=100.0,
+                        ),
+                    ),
+                    market_source_ref="fixture:archive-market",
+                ),
+            ),
+            external_observations=(
+                _source_observation("ArchiveResearchTheme"),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+    replay_archive = build_replay_archive_record(result)
+    policy = replace(
+        ResearchWorkOrderPolicy(),
+        industrials_company_dimensions=("growth",),
+        minimum_independent_sources=1,
+        minimum_independent_sources_per_company=1,
+        require_usable_linkage_for_company=False,
+    )
+    order = build_research_work_order(
+        replay_archive,
+        "ArchiveResearchTheme",
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=package,
+        target_tickers=("AAA", "BBB"),
+        policy=policy,
+    )
+    work_archive = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+
+    evidence_a = _hashed_evidence(
+        evidence_id="ev:AAA:cross-target",
+        source_ref="sec:AAA:cross-target",
+        payload={"revenue_growth": 0.2},
+        ticker="AAA",
+        source_type="sec_filing",
+    )
+    evidence_b = _hashed_evidence(
+        evidence_id="ev:BBB:cross-target",
+        source_ref="sec:BBB:cross-target",
+        payload={"revenue_growth": 0.3},
+        ticker="BBB",
+        source_type="sec_filing",
+    )
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T23:00:00+00:00",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence=evidence_a,
+                independent=True,
+                direction=ResearchEvidenceDirection.SUPPORTING,
+                dimensions=("growth",),
+                target_ticker="AAA",
+            ),
+            ResearchEvidenceInput(
+                evidence=evidence_b,
+                independent=True,
+                direction=ResearchEvidenceDirection.SUPPORTING,
+                dimensions=("growth",),
+                target_ticker="BBB",
+            ),
+        ),
+        company_submissions=(
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of="2026-09-20T20:00:00+00:00",
+                adapter_name="industrials_infrastructure",
+                raw_facts={"revenue_growth": 0.2},
+                evidence_source_hashes=(evidence_a.source_hash,),
+            ),
+            CompanyResearchSubmission(
+                ticker="BBB",
+                as_of="2026-09-20T20:00:00+00:00",
+                adapter_name="industrials_infrastructure",
+                raw_facts={"revenue_growth": 0.3},
+                evidence_source_hashes=(evidence_b.source_hash,),
+            ),
+        ),
+    )
+    assert dossier.status is ResearchDossierStatus.COMPLETE
+
+    assessment_a, assessment_b = dossier.company_assessments
+    snapshot_a = assessment_a.normalized_evidence
+    assert snapshot_a is not None
+    tampered_snapshot = replace(
+        snapshot_a,
+        provenance=(evidence_b.source_hash,),
+    )
+    tampered_assessment = replace(
+        assessment_a,
+        normalized_evidence=tampered_snapshot,
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        company_assessments=(
+            tampered_assessment,
+            assessment_b,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="inconsistent research company assessment",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
