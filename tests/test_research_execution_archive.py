@@ -1476,3 +1476,187 @@ def test_research_execution_archive_interfaces_are_publicly_importable():
         "write_research_dossier_archive",
     ):
         assert getattr(decision_lab, name) is not None
+
+
+
+def test_reader_does_not_require_parent_file_to_exist(tmp_path):
+    work_archive, order = _theme_work_order_archive()
+    parent = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    child = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-21T20:00:00+00:00",
+        ),
+        prior_dossier_archive=parent,
+    )
+    path = research_dossier_archive_path(child, tmp_path)
+    _write_json(path, child)
+
+    assert read_research_dossier_archive(path) == child
+
+
+def test_work_order_archive_policy_tuple_order_is_canonicalized():
+    replay_archive, order, policy = _replay_archive_and_order()
+    reordered = replace(
+        policy,
+        industrials_company_dimensions=tuple(
+            reversed(policy.industrials_company_dimensions)
+        ),
+    )
+
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=reordered,
+    )
+
+    assert record.work_order_policy == replace(
+        policy,
+        industrials_company_dimensions=tuple(
+            sorted(policy.industrials_company_dimensions)
+        ),
+        biotech_company_dimensions=tuple(
+            sorted(policy.biotech_company_dimensions)
+        ),
+        theme_reassessment_dimensions=tuple(
+            sorted(policy.theme_reassessment_dimensions)
+        ),
+    )
+
+
+def test_reader_rejects_rehashed_false_independent_source_count(tmp_path):
+    work_archive, dossier = _company_archive_and_dossier()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+    )
+    payload = asdict(record)
+    payload["dossier"]["independent_source_count"] = 99
+    nested = dict(payload["dossier"])
+    semantic = dict(nested)
+    semantic.pop("dossier_hash")
+    nested["dossier_hash"] = canonical_hash(semantic)
+    payload["dossier"] = nested
+    payload["dossier_hash"] = nested["dossier_hash"]
+    payload = _rehash_archive_payload(payload)
+    path = (
+        tmp_path
+        / "dossiers"
+        / "2026-09-19"
+        / work_archive.work_order_hash
+        / f"{payload['archive_record_hash']}.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="inconsistent research independent-source count",
+    ):
+        read_research_dossier_archive(path)
+
+
+def test_reader_accepts_shape_valid_input_hash_without_claiming_raw_recompute(
+    tmp_path,
+):
+    work_archive, dossier = _company_archive_and_dossier()
+    replacement_input_hash = "1" * 64
+    altered = replace(
+        dossier,
+        input_hash=replacement_input_hash,
+        dossier_hash="0" * 64,
+    )
+    semantic = asdict(altered)
+    semantic.pop("dossier_hash")
+    altered = replace(
+        altered,
+        dossier_hash=canonical_hash(semantic),
+    )
+    record_seed = ResearchDossierArchiveRecord(
+        schema_version="0.1",
+        content_type="research_dossier",
+        producer="theme-radar-decision-lab/research-execution-archive@0.1",
+        source_cycle_as_of=altered.source_cycle_as_of,
+        evidence_as_of=altered.evidence_as_of,
+        work_order_archive=work_archive,
+        prior_dossier_archive_record_hash=None,
+        dossier_hash=altered.dossier_hash,
+        dossier=altered,
+        archive_record_hash="0" * 64,
+    )
+    payload = asdict(record_seed)
+    payload.pop("archive_record_hash")
+    record = replace(
+        record_seed,
+        archive_record_hash=canonical_hash(payload),
+    )
+    path = research_dossier_archive_path(record, tmp_path)
+    _write_json(path, record)
+
+    loaded = read_research_dossier_archive(path)
+
+    assert loaded.dossier.input_hash == replacement_input_hash
+
+
+def test_reader_accepts_shape_valid_evidence_payload_hash_commitment_without_raw_payload(
+    tmp_path,
+):
+    work_archive, order = _theme_work_order_archive()
+    dossier = _theme_dossier(
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+    )
+    binding = dossier.evidence_bindings[0]
+    altered_evidence = replace(
+        binding.evidence,
+        payload_hash="2" * 64,
+    )
+    altered_binding = replace(
+        binding,
+        evidence=altered_evidence,
+    )
+    altered = replace(
+        dossier,
+        evidence_bindings=(altered_binding,),
+        dossier_hash="0" * 64,
+    )
+    semantic = asdict(altered)
+    semantic.pop("dossier_hash")
+    altered = replace(
+        altered,
+        dossier_hash=canonical_hash(semantic),
+    )
+    seed = ResearchDossierArchiveRecord(
+        schema_version="0.1",
+        content_type="research_dossier",
+        producer="theme-radar-decision-lab/research-execution-archive@0.1",
+        source_cycle_as_of=altered.source_cycle_as_of,
+        evidence_as_of=altered.evidence_as_of,
+        work_order_archive=work_archive,
+        prior_dossier_archive_record_hash=None,
+        dossier_hash=altered.dossier_hash,
+        dossier=altered,
+        archive_record_hash="0" * 64,
+    )
+    archive_payload = asdict(seed)
+    archive_payload.pop("archive_record_hash")
+    record = replace(
+        seed,
+        archive_record_hash=canonical_hash(archive_payload),
+    )
+    path = research_dossier_archive_path(record, tmp_path)
+    _write_json(path, record)
+
+    loaded = read_research_dossier_archive(path)
+
+    assert (
+        loaded.dossier.evidence_bindings[0].evidence.payload_hash
+        == "2" * 64
+    )
