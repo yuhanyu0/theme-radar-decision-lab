@@ -1,5 +1,5 @@
-from dataclasses import asdict, replace
 import json
+from dataclasses import asdict, replace
 
 import pytest
 
