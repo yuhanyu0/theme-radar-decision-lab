@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
 import json
+import os
 from math import isfinite
 from pathlib import Path
 
@@ -2647,3 +2648,224 @@ def verify_research_dossier_archive(
     ):
         return False
     return True
+
+
+
+def _record_payload(record) -> dict[str, object]:
+    return asdict(record)
+
+
+def _serialize_record(record) -> bytes:
+    return (
+        json.dumps(
+            _record_payload(record),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _contains_path_sequence(
+    parts: tuple[str, ...],
+    sequence: tuple[str, ...],
+) -> bool:
+    width = len(sequence)
+    return any(
+        tuple(parts[index : index + width])
+        == sequence
+        for index in range(
+            len(parts) - width + 1
+        )
+    )
+
+
+def _validate_destination_policy(
+    archive_root: str | Path,
+    *,
+    destination_visibility: ResearchArchiveDestinationVisibility,
+    public_safe: bool,
+) -> Path:
+    if not isinstance(
+        destination_visibility,
+        ResearchArchiveDestinationVisibility,
+    ):
+        raise TypeError(
+            "invalid research archive destination visibility"
+        )
+
+    resolved = (
+        Path(archive_root)
+        .expanduser()
+        .resolve(strict=False)
+    )
+    parts = tuple(resolved.parts)
+    if _contains_path_sequence(
+        parts,
+        ("ledger", "live"),
+    ):
+        raise ValueError(
+            "research archives may not be written under ledger/live"
+        )
+
+    if (
+        destination_visibility
+        is ResearchArchiveDestinationVisibility.PUBLIC
+    ):
+        if public_safe is not True:
+            raise PermissionError(
+                "public research archive write requires explicit public_safe=True"
+            )
+        if (
+            len(parts) < 2
+            or parts[-2:]
+            != (
+                "recomputed",
+                "research_execution",
+            )
+        ):
+            raise ValueError(
+                "public research archives must use recomputed/research_execution"
+            )
+    return resolved
+
+
+def _ensure_parent_within_root(
+    path: Path,
+    root: Path,
+) -> None:
+    resolved_parent = path.parent.resolve(
+        strict=False
+    )
+    if not resolved_parent.is_relative_to(root):
+        raise ValueError(
+            "research archive directory escapes archive root"
+        )
+
+
+def _write_archive_record(
+    record,
+    path: Path,
+    root: Path,
+    *,
+    reader,
+    content_hash: str,
+) -> ResearchArchiveWriteResult:
+    requested_payload = _record_payload(record)
+    requested_bytes = _serialize_record(record)
+
+    _ensure_parent_within_root(path, root)
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    _ensure_parent_within_root(path, root)
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        fd = os.open(
+            path,
+            flags,
+            0o644,
+        )
+    except FileExistsError:
+        if path.is_symlink() or path.is_dir():
+            raise FileExistsError(
+                "research archive path conflict"
+            ) from None
+        try:
+            existing = reader(path)
+        except (
+            FileNotFoundError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise FileExistsError(
+                "research archive path conflict"
+            ) from exc
+        if (
+            _record_payload(existing)
+            != requested_payload
+        ):
+            raise FileExistsError(
+                "research archive path conflict"
+            )
+        return ResearchArchiveWriteResult(
+            path=path,
+            created=False,
+            content_hash=content_hash,
+            archive_record_hash=(
+                record.archive_record_hash
+            ),
+        )
+
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(requested_bytes)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+    return ResearchArchiveWriteResult(
+        path=path,
+        created=True,
+        content_hash=content_hash,
+        archive_record_hash=(
+            record.archive_record_hash
+        ),
+    )
+
+
+def write_research_work_order_archive(
+    record: ResearchWorkOrderArchiveRecord,
+    archive_root: str | Path,
+    *,
+    destination_visibility: ResearchArchiveDestinationVisibility,
+    public_safe: bool = False,
+) -> ResearchArchiveWriteResult:
+    root = _validate_destination_policy(
+        archive_root,
+        destination_visibility=destination_visibility,
+        public_safe=public_safe,
+    )
+    _validate_work_order_archive_record(record)
+    path = research_work_order_archive_path(
+        record,
+        root,
+    )
+    return _write_archive_record(
+        record,
+        path,
+        root,
+        reader=read_research_work_order_archive,
+        content_hash=record.work_order_hash,
+    )
+
+
+def write_research_dossier_archive(
+    record: ResearchDossierArchiveRecord,
+    archive_root: str | Path,
+    *,
+    destination_visibility: ResearchArchiveDestinationVisibility,
+    public_safe: bool = False,
+) -> ResearchArchiveWriteResult:
+    root = _validate_destination_policy(
+        archive_root,
+        destination_visibility=destination_visibility,
+        public_safe=public_safe,
+    )
+    _validate_dossier_archive_record(record)
+    path = research_dossier_archive_path(
+        record,
+        root,
+    )
+    return _write_archive_record(
+        record,
+        path,
+        root,
+        reader=read_research_dossier_archive,
+        content_hash=record.dossier_hash,
+    )
