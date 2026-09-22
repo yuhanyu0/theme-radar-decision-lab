@@ -29,6 +29,7 @@ from decision_lab.research_execution import (
     build_research_work_order,
 )
 from decision_lab.research_execution_archive import (
+    ResearchArchiveDestinationVisibility,
     ResearchDossierArchiveRecord,
     ResearchWorkOrderArchiveRecord,
     build_research_dossier_archive_record,
@@ -39,6 +40,8 @@ from decision_lab.research_execution_archive import (
     research_work_order_archive_path,
     verify_research_dossier_archive,
     verify_research_work_order_archive,
+    write_research_dossier_archive,
+    write_research_work_order_archive,
 )
 from decision_lab.scanner import (
     ScannerConfig,
@@ -1052,3 +1055,401 @@ def test_verify_returns_false_for_missing_and_malformed_files(tmp_path):
     malformed.write_text("{bad-json", encoding="utf-8")
     assert not verify_research_work_order_archive(malformed)
     assert not verify_research_dossier_archive(malformed)
+
+
+
+@pytest.mark.parametrize("unsafe", [False, 1, "yes"])
+def test_public_research_archive_requires_literal_public_safe(
+    tmp_path,
+    unsafe,
+):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    root = tmp_path / "recomputed" / "research_execution"
+
+    with pytest.raises(
+        PermissionError,
+        match="public research archive write requires explicit public_safe=True",
+    ):
+        write_research_work_order_archive(
+            record,
+            root,
+            destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+            public_safe=unsafe,
+        )
+
+    assert not root.exists()
+
+
+def test_work_order_write_is_create_once_and_identical_write_is_idempotent(
+    tmp_path,
+):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    root = tmp_path / "recomputed" / "research_execution"
+
+    first = write_research_work_order_archive(
+        record,
+        root,
+        destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+        public_safe=True,
+    )
+    second = write_research_work_order_archive(
+        record,
+        root,
+        destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+        public_safe=True,
+    )
+
+    assert first.created
+    assert not second.created
+    assert first.path == second.path
+    assert first.content_hash == record.work_order_hash
+
+
+def test_dossier_write_round_trip_uses_archive_hash_filename(tmp_path):
+    work_archive, order = _theme_work_order_archive()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    root = tmp_path / "private-research"
+
+    written = write_research_dossier_archive(
+        record,
+        root,
+        destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+    )
+
+    assert written.created
+    assert written.path.name == f"{record.archive_record_hash}.json"
+    assert read_research_dossier_archive(written.path) == record
+
+
+def test_dossier_second_identical_write_is_idempotent(tmp_path):
+    work_archive, order = _theme_work_order_archive()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    root = tmp_path / "private-research"
+
+    first = write_research_dossier_archive(
+        record,
+        root,
+        destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+    )
+    second = write_research_dossier_archive(
+        record,
+        root,
+        destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+    )
+
+    assert first.created
+    assert not second.created
+    assert first.path == second.path
+
+
+def test_existing_invalid_file_is_never_overwritten(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    root = tmp_path / "private"
+    path = research_work_order_archive_path(record, root)
+    path.parent.mkdir(parents=True)
+    original = b'{"different":true}\n'
+    path.write_bytes(original)
+
+    with pytest.raises(
+        FileExistsError,
+        match="research archive path conflict",
+    ):
+        write_research_work_order_archive(
+            record,
+            root,
+            destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+        )
+
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "visibility",
+    [
+        ResearchArchiveDestinationVisibility.PUBLIC,
+        ResearchArchiveDestinationVisibility.PRIVATE,
+    ],
+)
+def test_research_archive_rejects_ledger_live(tmp_path, visibility):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    root = tmp_path / "ledger" / "live" / "research"
+
+    with pytest.raises(
+        ValueError,
+        match="research archives may not be written under ledger/live",
+    ):
+        write_research_work_order_archive(
+            record,
+            root,
+            destination_visibility=visibility,
+            public_safe=True,
+        )
+
+
+def test_public_research_archive_requires_canonical_root(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="public research archives must use recomputed/research_execution",
+    ):
+        write_research_work_order_archive(
+            record,
+            tmp_path / "reports" / "research_execution",
+            destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
+
+
+def test_dossier_work_order_directory_symlink_cannot_escape_root(tmp_path):
+    work_archive, order = _theme_work_order_archive()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    root = tmp_path / "recomputed" / "research_execution"
+    outside = tmp_path / "outside"
+    work_dir = (
+        root
+        / "dossiers"
+        / "2026-09-19"
+        / work_archive.work_order_hash
+    )
+    work_dir.parent.mkdir(parents=True)
+    outside.mkdir()
+    try:
+        work_dir.symlink_to(
+            outside,
+            target_is_directory=True,
+        )
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    with pytest.raises(
+        ValueError,
+        match="research archive directory escapes archive root",
+    ):
+        write_research_dossier_archive(
+            record,
+            root,
+            destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
+
+    assert not (
+        outside / f"{record.archive_record_hash}.json"
+    ).exists()
+
+
+def test_work_order_cycle_directory_symlink_cannot_escape_root(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    root = tmp_path / "recomputed" / "research_execution"
+    outside = tmp_path / "outside"
+    cycle_dir = root / "work_orders" / "2026-09-19"
+    cycle_dir.parent.mkdir(parents=True)
+    outside.mkdir()
+    try:
+        cycle_dir.symlink_to(
+            outside,
+            target_is_directory=True,
+        )
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    with pytest.raises(
+        ValueError,
+        match="research archive directory escapes archive root",
+    ):
+        write_research_work_order_archive(
+            record,
+            root,
+            destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
+
+    assert not (
+        outside / f"{record.work_order_hash}.json"
+    ).exists()
+
+
+def test_public_root_symlink_to_noncanonical_destination_is_rejected(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    target = tmp_path / "reports" / "research_execution"
+    target.mkdir(parents=True)
+    parent = tmp_path / "recomputed"
+    parent.mkdir()
+    link = parent / "research_execution"
+    try:
+        link.symlink_to(
+            target,
+            target_is_directory=True,
+        )
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    with pytest.raises(
+        ValueError,
+        match="public research archives must use recomputed/research_execution",
+    ):
+        write_research_work_order_archive(
+            record,
+            link,
+            destination_visibility=ResearchArchiveDestinationVisibility.PUBLIC,
+            public_safe=True,
+        )
+
+
+def test_existing_archive_file_symlink_is_conflict(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    source = write_research_work_order_archive(
+        record,
+        tmp_path / "source",
+        destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+    )
+    target_root = tmp_path / "target"
+    target = research_work_order_archive_path(
+        record,
+        target_root,
+    )
+    target.parent.mkdir(parents=True)
+    try:
+        target.symlink_to(source.path)
+    except OSError:
+        pytest.skip("symlink creation unsupported")
+
+    with pytest.raises(
+        FileExistsError,
+        match="research archive path conflict",
+    ):
+        write_research_work_order_archive(
+            record,
+            target_root,
+            destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+        )
+
+
+def test_identical_records_have_identical_json_bytes_across_roots(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    first = write_research_work_order_archive(
+        record,
+        tmp_path / "a",
+        destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+    )
+    second = write_research_work_order_archive(
+        record,
+        tmp_path / "b",
+        destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+    )
+
+    assert first.path.read_bytes() == second.path.read_bytes()
+
+
+def test_partial_new_research_archive_file_is_removed_on_write_failure(
+    tmp_path,
+    monkeypatch,
+):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    root = tmp_path / "private"
+
+    class BrokenWriter:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def write(self, data):
+            raise OSError(
+                "simulated research archive write failure"
+            )
+
+    import os
+
+    real_fdopen = os.fdopen
+
+    def broken_fdopen(fd, mode):
+        os.close(fd)
+        return BrokenWriter()
+
+    monkeypatch.setattr(os, "fdopen", broken_fdopen)
+
+    with pytest.raises(
+        OSError,
+        match="simulated research archive write failure",
+    ):
+        write_research_work_order_archive(
+            record,
+            root,
+            destination_visibility=ResearchArchiveDestinationVisibility.PRIVATE,
+        )
+
+    assert not research_work_order_archive_path(
+        record,
+        root,
+    ).exists()
+    monkeypatch.setattr(os, "fdopen", real_fdopen)
