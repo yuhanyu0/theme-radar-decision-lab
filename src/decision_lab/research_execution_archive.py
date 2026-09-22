@@ -465,13 +465,59 @@ def _validate_frozen_evidence(
             raise ValueError("research evidence target mismatch")
 
 
+def _validate_optional_numeric_runtime(
+    value,
+    *,
+    field_name: str,
+) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(
+        value,
+        (int, float),
+    ):
+        raise TypeError(
+            f"research linkage {field_name} must be numeric or null"
+        )
+    if not isfinite(float(value)):
+        raise ValueError(
+            f"research linkage {field_name} must be finite"
+        )
+
+
+def _validate_int_runtime(
+    value,
+    *,
+    field_name: str,
+    prefix: str = "research linkage",
+) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{prefix} {field_name} must be int")
+
+
 def _validate_simple_linkage(
     linkage: LinkageResult,
     *,
     ticker: str,
 ) -> None:
+    if not isinstance(linkage.ticker, str):
+        raise TypeError("research linkage ticker must be str")
+    if not isinstance(linkage.control_name, str):
+        raise TypeError("research linkage control_name must be str")
     if linkage.ticker != ticker:
         raise ValueError("research linkage ticker mismatch")
+    _validate_int_runtime(
+        linkage.window,
+        field_name="window",
+    )
+    _validate_int_runtime(
+        linkage.observations,
+        field_name="observations",
+    )
+    if not isinstance(linkage.circularity_warning, bool):
+        raise TypeError(
+            "research linkage circularity_warning must be bool"
+        )
     for field_name in (
         "correlation",
         "beta",
@@ -481,14 +527,10 @@ def _validate_simple_linkage(
         "beta_stability",
         "decoupling_score",
     ):
-        value = getattr(linkage, field_name)
-        if (
-            value is not None
-            and not isfinite(float(value))
-        ):
-            raise ValueError(
-                "research linkage numeric field must be finite"
-            )
+        _validate_optional_numeric_runtime(
+            getattr(linkage, field_name),
+            field_name=field_name,
+        )
 
 
 def _validate_hierarchical_snapshot(
@@ -496,8 +538,37 @@ def _validate_hierarchical_snapshot(
     *,
     ticker: str,
 ) -> None:
+    if not isinstance(snapshot.target, str):
+        raise TypeError(
+            "research hierarchical linkage target must be str"
+        )
+    if not isinstance(snapshot.status, str):
+        raise TypeError(
+            "research hierarchical linkage status must be str"
+        )
     if snapshot.target != ticker:
         raise ValueError("research linkage ticker mismatch")
+    _validate_int_runtime(
+        snapshot.window,
+        field_name="window",
+        prefix="research hierarchical linkage",
+    )
+    _validate_int_runtime(
+        snapshot.observations,
+        field_name="observations",
+        prefix="research hierarchical linkage",
+    )
+    if not isinstance(snapshot.circularity_warning, bool):
+        raise TypeError(
+            "research hierarchical linkage circularity_warning must be bool"
+        )
+    if not isinstance(snapshot.missing_controls, tuple) or any(
+        not isinstance(item, str)
+        for item in snapshot.missing_controls
+    ):
+        raise TypeError(
+            "research hierarchical linkage missing_controls must be tuple[str, ...]"
+        )
     for field_name in (
         "theme_correlation",
         "theme_beta",
@@ -507,12 +578,39 @@ def _validate_hierarchical_snapshot(
         "residual_vol",
     ):
         value = getattr(snapshot, field_name)
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+        ):
+            raise TypeError(
+                f"research hierarchical linkage {field_name} must be numeric or null"
+            )
         if (
             value is not None
             and not isfinite(float(value))
         ):
             raise ValueError(
-                "research linkage numeric field must be finite"
+                f"research hierarchical linkage {field_name} must be finite"
+            )
+    if not isinstance(snapshot.coefficients, tuple):
+        raise TypeError(
+            "research hierarchical linkage coefficients must be tuple"
+        )
+    for item in snapshot.coefficients:
+        if (
+            not isinstance(item, tuple)
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or not item[0]
+            or isinstance(item[1], bool)
+            or not isinstance(item[1], (int, float))
+        ):
+            raise TypeError(
+                "invalid research hierarchical linkage coefficient type"
+            )
+        if not isfinite(float(item[1])):
+            raise ValueError(
+                "research hierarchical linkage coefficient must be finite"
             )
     if (
         snapshot.coefficients
@@ -521,10 +619,6 @@ def _validate_hierarchical_snapshot(
             {name for name, _ in snapshot.coefficients}
         )
         != len(snapshot.coefficients)
-        or any(
-            not name or not isfinite(float(value))
-            for name, value in snapshot.coefficients
-        )
     ):
         raise ValueError(
             "invalid research hierarchical linkage coefficients"
@@ -1053,12 +1147,27 @@ def _validate_dossier(
         raise ValueError(
             "invalid research evidence binding ordering"
         )
+    source_metadata: dict[str, tuple[bool, str]] = {}
     for binding in dossier.evidence_bindings:
         _validate_frozen_evidence(
             binding,
             order=order,
             evidence_as_of=evidence_as_of,
         )
+        metadata = (
+            binding.independent,
+            binding.evidence.source_type,
+        )
+        previous = source_metadata.get(
+            binding.evidence.source_ref
+        )
+        if previous is not None and previous != metadata:
+            raise ValueError(
+                "conflicting research source metadata"
+            )
+        source_metadata[
+            binding.evidence.source_ref
+        ] = metadata
 
     _validate_company_assessments(
         dossier,
@@ -2584,6 +2693,11 @@ def read_research_work_order_archive(
         raise ValueError(
             "research archive cycle directory mismatch"
         )
+    if target.parent.parent.name != "work_orders":
+        raise ValueError(
+            "research work-order archive path mismatch: "
+            "research work-order archive type directory mismatch"
+        )
     return record
 
 
@@ -2614,6 +2728,11 @@ def read_research_dossier_archive(
     ):
         raise ValueError(
             "research archive cycle directory mismatch"
+        )
+    if target.parent.parent.parent.name != "dossiers":
+        raise ValueError(
+            "research dossier archive path mismatch: "
+            "research dossier archive type directory mismatch"
         )
     return record
 
