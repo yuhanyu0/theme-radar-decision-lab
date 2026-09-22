@@ -95,7 +95,6 @@ Create `tests/test_research_execution_archive.py`:
 
 ```python
 from dataclasses import asdict, replace
-from pathlib import Path
 
 import pytest
 
@@ -108,9 +107,8 @@ from decision_lab.market_observation import (
 )
 from decision_lab.replay import ReplayCycleInput, ThemeReplayInput, run_replay_cycle
 from decision_lab.replay_archive import build_replay_archive_record
-from decision_lab.research_budget import ResearchBudgetConfig, ResearchTier
+from decision_lab.research_budget import ResearchBudgetConfig
 from decision_lab.research_execution import (
-    ResearchAuthorization,
     ResearchMode,
     ResearchWorkOrderPolicy,
     build_research_work_order,
@@ -431,7 +429,7 @@ Create `src/decision_lab/research_execution_archive.py`:
 ```python
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
@@ -782,8 +780,6 @@ from decision_lab.research_execution import (
     ResearchEvidenceDirection,
     ResearchEvidenceInput,
     ResearchExecutionClosure,
-    ResearchFinding,
-    ResearchFindingKind,
     build_research_dossier,
 )
 from decision_lab.research_execution_archive import (
@@ -870,7 +866,7 @@ def _theme_dossier(
     )
 
 
-def _company_archive_and_dossier():
+def _company_archive_and_dossier(*, hierarchical=False):
     replay_archive, order, policy = _replay_archive_and_order(
         policy=replace(
             ResearchWorkOrderPolicy(),
@@ -905,6 +901,32 @@ def _company_archive_and_dossier():
         circularity_warning=False,
         observations=63,
     )
+    hierarchical_linkage = HierarchicalLinkageResult(
+        target="AAA",
+        status="ok",
+        window=63,
+        observations=63,
+        theme_correlation=0.6,
+        theme_beta=0.7,
+        r2=0.5,
+        incremental_theme_r2=0.2,
+        residual_mean=0.0,
+        residual_vol=0.02,
+        circularity_warning=False,
+        missing_controls=(),
+        coefficients={"SPY": 0.3, "ArchiveResearchTheme": 0.7},
+    )
+    linkage_submission = (
+        CompanyLinkageSubmission(
+            ticker="AAA",
+            hierarchical_linkage=hierarchical_linkage,
+        )
+        if hierarchical
+        else CompanyLinkageSubmission(
+            ticker="AAA",
+            linkage=linkage,
+        )
+    )
     dossier = build_research_dossier(
         order,
         evidence_as_of="2026-09-20T23:00:00+00:00",
@@ -927,12 +949,7 @@ def _company_archive_and_dossier():
                 evidence_source_hashes=(evidence.source_hash,),
             ),
         ),
-        linkage_submissions=(
-            CompanyLinkageSubmission(
-                ticker="AAA",
-                linkage=linkage,
-            ),
-        ),
+        linkage_submissions=(linkage_submission,),
     )
     assert dossier.status is ResearchDossierStatus.COMPLETE
     return work_archive, dossier
@@ -1164,6 +1181,37 @@ def test_dossier_archive_rejects_rehashed_noncanonical_company_snapshot():
     with pytest.raises(
         ValueError,
         match="inconsistent research company assessment",
+    ):
+        build_research_dossier_archive_record(
+            work_archive,
+            tampered,
+        )
+
+
+
+def test_dossier_archive_rejects_rehashed_hierarchical_source_payload_hash():
+    work_archive, dossier = _company_archive_and_dossier(
+        hierarchical=True
+    )
+    assessment = dossier.company_assessments[0]
+    snapshot = assessment.hierarchical_linkage
+    assert snapshot is not None
+    tampered_snapshot = replace(
+        snapshot,
+        source_payload_hash="1" * 64,
+    )
+    tampered_assessment = replace(
+        assessment,
+        hierarchical_linkage=tampered_snapshot,
+    )
+    tampered = _rehash_dossier(
+        dossier,
+        company_assessments=(tampered_assessment,),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="hierarchical linkage source payload hash mismatch",
     ):
         build_research_dossier_archive_record(
             work_archive,
