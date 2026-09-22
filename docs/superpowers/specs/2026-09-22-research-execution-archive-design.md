@@ -842,7 +842,11 @@ Readers reject:
     Infinity
     -Infinity
 
-using json.loads(parse_constant=...).
+using a dedicated rejection callback:
+
+    json.loads(..., parse_constant=_reject_json_constant)
+
+where _reject_json_constant raises ValueError for every non-standard constant.
 
 No non-standard JSON numeric values are accepted.
 
