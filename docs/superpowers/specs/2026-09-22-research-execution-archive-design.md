@@ -331,7 +331,34 @@ Require:
     normalized(work_order.source_cycle_as_of)
       == normalized(replay_archive.cycle_as_of)
 
-The theme/routing semantics are already committed in the WorkOrder.
+Hash equality is necessary but not sufficient.
+
+The builder must also independently recover the source theme transition from the supplied ReplayArchiveRecord using the same public cohort semantics as Increment 8:
+
+    evaluate_replay_cohort(
+        (replay_archive,),
+        horizons=(1,),
+    )
+
+For work_order.theme_id require exactly one source transition and require:
+
+    transition.routing_intent
+      == work_order.source_routing_intent
+
+    transition.source_registered
+      == work_order.source_registered
+
+    transition.source_tier
+      == work_order.source_allocated_tier
+
+    transition.source_forced_review
+      == work_order.source_forced_review
+
+If the theme is absent or any routing provenance differs:
+
+    ValueError("research work order replay lineage mismatch")
+
+This prevents a rehashed, internally self-consistent WorkOrder from falsely claiming a different routing state from the real source replay.
 
 Any mismatch raises:
 
@@ -1670,3 +1697,22 @@ but does not verify:
     raw execution inputs -> input_hash
 
 A malicious actor who can replace both input_hash and recompute all enclosing semantic hashes could create a self-consistent but historically false record. Preventing that requires trusted archive provenance or retention of original inputs, which is outside Increment 9.
+
+
+## 127. Replay-routing provenance acceptance
+
+Start from one valid ReplayArchiveRecord.
+
+Construct a ResearchWorkOrder that:
+
+- preserves source_archive_record_hash;
+- preserves source_replay_result_hash;
+- preserves source_cycle_as_of;
+- remains internally semantically valid after rehashing;
+- but changes source routing provenance to a different internally valid combination.
+
+The WorkOrder archive builder must reject because the supplied replay's actual cohort transition does not match:
+
+    ValueError("research work order replay lineage mismatch")
+
+This test proves source hash equality is not treated as sufficient provenance.
