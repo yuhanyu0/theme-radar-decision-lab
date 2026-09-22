@@ -1716,3 +1716,95 @@ The WorkOrder archive builder must reject because the supplied replay's actual c
     ValueError("research work order replay lineage mismatch")
 
 This test proves source hash equality is not treated as sufficient provenance.
+
+
+## 128. Company-assessment semantic closure
+
+For COMPANY_DEEP_DIVE Dossiers, archive validation must require:
+
+- exactly one CompanyResearchAssessment per WorkOrder target;
+- no assessment for a ticker outside WorkOrder targets;
+- assessment.ticker is canonical uppercase target identity;
+- assessment.evidence_source_hashes equals the sorted set of stored evidence-binding source_hash values whose target_ticker equals that ticker;
+- assessment.independent_source_count equals the number of distinct independent source_ref values among those target bindings;
+- assessment.covered_dimensions equals the normalized snapshot field names when normalized_evidence is present, otherwise ();
+- normalized_evidence.ticker equals assessment.ticker;
+- normalized_evidence.adapter_name equals WorkOrder.evidence_adapter;
+- normalized_evidence field names are unique and lexical;
+- normalized_evidence.normalized_payload_hash is a valid lowercase SHA-256 commitment;
+- assessment.linkage_status is recomputed from the stored simple/hierarchical linkage objects;
+- assessment.cautions is recomputed from linkage status and WorkOrder.minimum_independent_sources_per_company.
+
+For THEME_REASSESSMENT:
+
+    company_assessments == ()
+
+Any mismatch raises:
+
+    ValueError("inconsistent research company assessment")
+
+## 129. Linkage snapshot semantic closure
+
+Simple LinkageResult validation requires:
+
+- ticker matches assessment ticker;
+- all non-None numeric fields are finite.
+
+HierarchicalLinkageSnapshot validation requires:
+
+- target matches assessment ticker;
+- all non-None numeric fields are finite;
+- coefficients names are unique;
+- coefficients are lexical by control name;
+- coefficient values are finite;
+- source_payload_hash is a lowercase SHA-256 string.
+
+Because HierarchicalLinkageSnapshot retains every semantic field from HierarchicalLinkageResult except that coefficients are frozen as tuples, the validator should reconstruct the original semantic payload with:
+
+    coefficients = {name: value for name, value in snapshot.coefficients}
+
+and require:
+
+    canonical_hash(reconstructed_payload)
+      == snapshot.source_payload_hash
+
+This hash is independently recoverable.
+
+## 130. Evidence-binding semantic closure
+
+For every ResearchEvidenceBinding stored in a Dossier:
+
+- evidence.source_hash is lowercase 64-char SHA-256;
+- evidence.payload_hash is lowercase 64-char SHA-256;
+- evidence.source_ref is non-empty;
+- evidence.source_type belongs to the supported evidence source registry;
+- evidence.is_observed_fact is bool;
+- independent is bool;
+- direction is a valid ResearchEvidenceDirection;
+- dimensions are non-empty, unique, stripped, and lexical;
+- target_ticker obeys WorkOrder mode/target rules;
+- model/inferred evidence cannot be marked independent;
+- evidence observed_at, market_asof, and retrieved_at do not exceed Dossier.evidence_as_of.
+
+The reader cannot recompute evidence.source_hash or payload_hash without the omitted EvidenceRecord payload. It validates their shape and all retained semantics only.
+
+## 131. Finding semantic closure
+
+For every stored ResearchFinding:
+
+- finding_id is non-empty and unique;
+- dimension and statement are non-empty;
+- evidence_source_hashes are unique and lexical;
+- every referenced hash exists among stored Dossier evidence bindings;
+- target_ticker is within WorkOrder targets when present;
+- a company finding cannot cite ticker-specific evidence from another target;
+- OBSERVED_SYNTHESIS has non-None direction, at least one evidence reference, and all referenced evidence is observed fact;
+- INFERENCE has non-None direction and at least one evidence reference;
+- UNRESOLVED has direction None.
+
+Recompute:
+
+    unresolved_present
+    contradictions_present
+
+from stored findings + evidence bindings and require exact equality with Dossier fields.
