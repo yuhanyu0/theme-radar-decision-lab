@@ -1,4 +1,5 @@
 from dataclasses import asdict, replace
+import json
 
 import pytest
 
@@ -32,8 +33,12 @@ from decision_lab.research_execution_archive import (
     ResearchWorkOrderArchiveRecord,
     build_research_dossier_archive_record,
     build_research_work_order_archive_record,
+    read_research_dossier_archive,
+    read_research_work_order_archive,
     research_dossier_archive_path,
     research_work_order_archive_path,
+    verify_research_dossier_archive,
+    verify_research_work_order_archive,
 )
 from decision_lab.scanner import (
     ScannerConfig,
@@ -788,3 +793,262 @@ def test_dossier_archive_rejects_rehashed_hierarchical_source_payload_hash():
             work_archive,
             tampered,
         )
+
+
+
+def _write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            asdict(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_work_order_reader_round_trip_preserves_typed_policy_and_order(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    path = research_work_order_archive_path(record, tmp_path)
+    _write_json(path, record)
+
+    loaded = read_research_work_order_archive(path)
+
+    assert loaded == record
+    assert loaded.work_order_policy == record.work_order_policy
+    assert verify_research_work_order_archive(path)
+
+
+def test_dossier_reader_round_trip_preserves_parent_hash_without_parent_file(
+    tmp_path,
+):
+    work_archive, order = _theme_work_order_archive()
+    parent = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    child = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-21T20:00:00+00:00",
+        ),
+        prior_dossier_archive=parent,
+    )
+    path = research_dossier_archive_path(child, tmp_path)
+    _write_json(path, child)
+
+    loaded = read_research_dossier_archive(path)
+
+    assert loaded == child
+    assert (
+        loaded.prior_dossier_archive_record_hash
+        == parent.archive_record_hash
+    )
+    assert verify_research_dossier_archive(path)
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda payload: payload.update(extra_field=True),
+        lambda payload: payload.pop("producer"),
+        lambda payload: payload.__setitem__(
+            "archive_record_hash",
+            "0" * 64,
+        ),
+    ],
+)
+def test_work_order_reader_rejects_top_level_schema_or_hash_tamper(
+    tmp_path,
+    mutator,
+):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    payload = asdict(record)
+    mutator(payload)
+    path = research_work_order_archive_path(record, tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert not verify_research_work_order_archive(path)
+    with pytest.raises((TypeError, ValueError)):
+        read_research_work_order_archive(path)
+
+
+def test_work_order_reader_rejects_wrong_filename(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    path = (
+        tmp_path
+        / "work_orders"
+        / "2026-09-19"
+        / f"{'1' * 64}.json"
+    )
+    _write_json(path, record)
+
+    with pytest.raises(
+        ValueError,
+        match="research work-order archive filename mismatch",
+    ):
+        read_research_work_order_archive(path)
+
+
+def test_work_order_reader_rejects_wrong_cycle_directory(tmp_path):
+    replay_archive, order, policy = _replay_archive_and_order()
+    record = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    path = (
+        tmp_path
+        / "work_orders"
+        / "2026-09-18"
+        / f"{record.work_order_hash}.json"
+    )
+    _write_json(path, record)
+
+    with pytest.raises(
+        ValueError,
+        match="research archive cycle directory mismatch",
+    ):
+        read_research_work_order_archive(path)
+
+
+def test_dossier_reader_rejects_wrong_work_order_directory_and_filename(
+    tmp_path,
+):
+    work_archive, order = _theme_work_order_archive()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        _theme_dossier(
+            order,
+            evidence_as_of="2026-09-20T20:00:00+00:00",
+        ),
+    )
+    wrong_dir = (
+        tmp_path
+        / "dossiers"
+        / "2026-09-19"
+        / ("1" * 64)
+        / f"{record.archive_record_hash}.json"
+    )
+    _write_json(wrong_dir, record)
+    with pytest.raises(
+        ValueError,
+        match="research dossier work-order directory mismatch",
+    ):
+        read_research_dossier_archive(wrong_dir)
+
+    wrong_name = (
+        tmp_path
+        / "dossiers"
+        / "2026-09-19"
+        / record.work_order_archive.work_order_hash
+        / f"{'2' * 64}.json"
+    )
+    _write_json(wrong_name, record)
+    with pytest.raises(
+        ValueError,
+        match="research dossier archive filename mismatch",
+    ):
+        read_research_dossier_archive(wrong_name)
+
+
+def test_reader_rejects_non_finite_json_constant(tmp_path):
+    work_archive, dossier = _company_archive_and_dossier()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+    )
+    payload = asdict(record)
+    payload["dossier"]["company_assessments"][0]["linkage"]["beta"] = float(
+        "nan"
+    )
+    path = research_dossier_archive_path(record, tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, allow_nan=True),
+        encoding="utf-8",
+    )
+
+    assert not verify_research_dossier_archive(path)
+    with pytest.raises(
+        ValueError,
+        match="non-finite JSON constant",
+    ):
+        read_research_dossier_archive(path)
+
+
+def _rehash_archive_payload(payload):
+    archive_payload = dict(payload)
+    archive_payload["archive_record_hash"] = "0" * 64
+    semantic = dict(archive_payload)
+    semantic.pop("archive_record_hash")
+    archive_payload["archive_record_hash"] = canonical_hash(semantic)
+    return archive_payload
+
+
+def test_reader_rejects_rehashed_false_dossier_status(tmp_path):
+    work_archive, dossier = _company_archive_and_dossier()
+    record = build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+    )
+    payload = asdict(record)
+    payload["dossier"]["status"] = "PARTIAL"
+    nested = dict(payload["dossier"])
+    nested["dossier_hash"] = "0" * 64
+    semantic = dict(nested)
+    semantic.pop("dossier_hash")
+    nested["dossier_hash"] = canonical_hash(semantic)
+    payload["dossier"] = nested
+    payload["dossier_hash"] = nested["dossier_hash"]
+    payload = _rehash_archive_payload(payload)
+    path = (
+        tmp_path
+        / "dossiers"
+        / "2026-09-19"
+        / work_archive.work_order_hash
+        / f"{payload['archive_record_hash']}.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="inconsistent research dossier derived state",
+    ):
+        read_research_dossier_archive(path)
+
+
+def test_verify_returns_false_for_missing_and_malformed_files(tmp_path):
+    missing = tmp_path / "missing.json"
+    assert not verify_research_work_order_archive(missing)
+    assert not verify_research_dossier_archive(missing)
+
+    malformed = tmp_path / "bad.json"
+    malformed.write_text("{bad-json", encoding="utf-8")
+    assert not verify_research_work_order_archive(malformed)
+    assert not verify_research_dossier_archive(malformed)
