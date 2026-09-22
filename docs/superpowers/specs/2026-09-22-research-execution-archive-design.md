@@ -360,8 +360,8 @@ Require:
     work_order.source_replay_result_hash
       == replay_archive.replay_result_hash
 
-    normalized(work_order.source_cycle_as_of)
-      == normalized(replay_archive.cycle_as_of)
+    work_order.source_cycle_as_of
+      == replay_archive.cycle_as_of
 
 Hash equality is necessary but not sufficient.
 
@@ -1927,3 +1927,18 @@ These duplicated fields are not alternate spellings. They must be exact copies.
 UTC normalization is used only for temporal ordering and path-date derivation.
 
 Any mismatch raises the relevant archive lineage/value error.
+
+
+## 136. Source replay cycle spelling is provenance
+
+ResearchWorkOrder.source_cycle_as_of is copied directly from ReplayArchiveRecord.cycle_as_of by Increment 8.
+
+Therefore WorkOrder archive construction requires exact string equality between those two fields.
+
+Equivalent timestamps with different spellings are not accepted at this lineage boundary.
+
+UTC normalization remains appropriate for:
+
+- path-date derivation;
+- Dossier parent temporal ordering;
+- evidence/source-cycle temporal comparisons.
