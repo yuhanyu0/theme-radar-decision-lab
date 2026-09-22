@@ -272,6 +272,7 @@ Define frozen dataclass:
       source_replay_archive_record_hash: str
       source_replay_result_hash: str
       work_order_hash: str
+      work_order_policy: ResearchWorkOrderPolicy
       work_order: ResearchWorkOrder
       archive_record_hash: str
 
@@ -282,11 +283,15 @@ Public builder:
     build_research_work_order_archive_record(
         replay_archive: ReplayArchiveRecord,
         work_order: ResearchWorkOrder,
+        *,
+        work_order_policy: ResearchWorkOrderPolicy,
     ) -> ResearchWorkOrderArchiveRecord
 
-The caller must provide both objects.
+The caller must provide the replay archive, WorkOrder, and the complete WorkOrder policy used to generate that WorkOrder.
 
 The builder does not accept only hash strings.
+
+The policy is archived because policy identity is part of the historical research regime and cannot be recovered from ResearchWorkOrder.policy_hash alone.
 
 ## 18. Replay archive validation
 
@@ -304,19 +309,46 @@ If invalid:
 
 The WorkOrder archive builder must not trust a manually constructed replay archive object.
 
-## 19. WorkOrder validation
+## 19. WorkOrder and policy validation
 
-The builder must independently validate ResearchWorkOrder semantic integrity.
+The builder must independently validate ResearchWorkOrder semantic integrity and exact policy provenance.
 
-Use a public Increment-8 validation surface if one exists after implementation; otherwise the archive module may call the existing internal deterministic validator.
+Normalize work_order_policy using the same deterministic Increment-8 policy normalization semantics.
+
+Require:
+
+    canonical_hash(asdict(normalized_policy))
+      == work_order.policy_hash
+
+Require:
+
+    normalized_policy.minimum_independent_sources
+      == work_order.minimum_independent_sources
+
+    normalized_policy.minimum_independent_sources_per_company
+      == work_order.minimum_independent_sources_per_company
+
+Regenerate the expected ResearchRequirement tuple from:
+
+    work_order.research_mode
+    work_order.targets
+    work_order.evidence_adapter
+    normalized_policy
+
+and require exact equality with:
+
+    work_order.requirements
+
+Use a public Increment-8 validation surface if one exists after implementation; otherwise the archive module may call the existing internal deterministic validators/builders.
 
 It must validate more than work_order_hash shape.
 
-A rehashed semantically inconsistent WorkOrder must fail.
+A rehashed semantically inconsistent WorkOrder or mismatched policy must fail.
 
-Error:
+Errors:
 
     ValueError("invalid research work order")
+    ValueError("research work order policy mismatch")
 
 ## 20. Replay-to-WorkOrder lineage
 
@@ -385,7 +417,7 @@ archive_record_hash is:
       excluding archive_record_hash
     )
 
-The nested WorkOrder is included fully.
+The complete normalized WorkOrder policy and nested WorkOrder are included fully.
 
 No archived_at wall-clock timestamp is included.
 
@@ -814,7 +846,9 @@ using json.loads(parse_constant=...).
 
 No non-standard JSON numeric values are accepted.
 
-## 51. Nested ResearchWorkOrder decoder
+## 51. Nested ResearchWorkOrder and policy decoder
+
+Increment 9 must decode ResearchWorkOrderPolicy exactly and normalize/validate it.
 
 Increment 9 must decode ResearchWorkOrder exactly, including:
 
@@ -1701,7 +1735,7 @@ A malicious actor who can replace both input_hash and recompute all enclosing se
 
 ## 127. Replay-routing provenance acceptance
 
-Start from one valid ReplayArchiveRecord.
+Start from one valid ReplayArchiveRecord and matching ResearchWorkOrderPolicy.
 
 Construct a ResearchWorkOrder that:
 
@@ -1808,3 +1842,50 @@ Recompute:
     contradictions_present
 
 from stored findings + evidence bindings and require exact equality with Dossier fields.
+
+
+## 132. WorkOrder policy archival invariant
+
+ResearchWorkOrderArchiveRecord freezes the complete normalized ResearchWorkOrderPolicy.
+
+This allows later readers to distinguish:
+
+    same WorkOrder-like requirement shape
+    under different policy regimes
+
+and allows exact recomputation of:
+
+    policy_hash
+    requirement generation
+    minimum-independent-source thresholds
+
+The archive must not reduce policy history to a hash-only commitment.
+
+## 133. WorkOrder policy mismatch acceptance
+
+Start from a valid replay + WorkOrder + policy.
+
+Supply a different normalized policy that changes any of:
+
+- research dimensions;
+- independent-source minima;
+- linkage requirement flag;
+- policy version.
+
+Even if the WorkOrder itself is unchanged and internally valid, the archive builder rejects:
+
+    ValueError("research work order policy mismatch")
+
+## 134. WorkOrder policy round-trip acceptance
+
+WorkOrder archive write/read preserves exact typed ResearchWorkOrderPolicy equality.
+
+Reader independently recomputes:
+
+    canonical_hash(asdict(work_order_policy))
+
+and requires equality with:
+
+    work_order.policy_hash
+
+Then regenerate expected requirements and minima and require exact WorkOrder equality on those policy-derived fields.
