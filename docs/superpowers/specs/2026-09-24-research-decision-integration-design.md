@@ -528,6 +528,28 @@ compile_research_gated_decision may forward the existing optional compile_decisi
 
 No new meaning is assigned to them.
 
+## 33A. Target-bearing optional metadata must remain consistent
+
+Optional metadata is forwarded under its existing semantics, but structured metadata that already declares a company target must not contradict the admitted target.
+
+For:
+
+    linkage: LinkageResult | None
+
+if linkage is present:
+
+    normalize(linkage.ticker) == admission.ticker
+
+is required.
+
+Otherwise:
+
+    raise ValueError
+
+This is provenance consistency, not a new research or trading gate.
+
+It prevents a Decision Object authorized for one company from carrying a LinkageResult computed for another company.
+
 ## 34. strongest_reason_not_to_trade remains required
 
 The integration compiler preserves the existing required:
