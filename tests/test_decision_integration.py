@@ -3,9 +3,11 @@ from dataclasses import fields, replace
 from decision_lab.decision import compile_decision
 from decision_lab.decision_integration import (
     DecisionRoutingInputs,
+    ResearchDecisionAdmissionStatus,
     evaluate_research_decision_integration,
 )
 from decision_lab.evidence import EvidenceRecord
+from decision_lab.linkage import LinkageResult
 from decision_lab.market_observation import (
     MarketBar,
     MarketObservationConfig,
@@ -17,6 +19,9 @@ from decision_lab.replay import ReplayCycleInput, ThemeReplayInput, run_replay_c
 from decision_lab.replay_archive import build_replay_archive_record
 from decision_lab.research_budget import ResearchBudgetConfig
 from decision_lab.research_execution import (
+    CompanyLinkageSubmission,
+    CompanyResearchSubmission,
+    ResearchDossierStatus,
     ResearchEvidenceDirection,
     ResearchEvidenceInput,
     ResearchExecutionClosure,
@@ -349,3 +354,327 @@ def test_integration_hashes_are_deterministic():
     assert len(first.routing_inputs_hash) == 64
     assert len(first.routing_hash) == 64
     assert len(first.integration_hash) == 64
+
+
+def _company_ready_record():
+    package = _theme_package()
+    theme = package.definition.theme_id
+    replay = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(
+                ThemeReplayInput(
+                    package=package,
+                    market_spec=MarketObservationSpec(
+                        theme_id=theme,
+                        mode=MarketObservationMode.BASKET,
+                        benchmark="SPY",
+                        current_return_sessions=1,
+                        prior_return_sessions=1,
+                        min_basket_members=1,
+                        version="integration-company-test",
+                    ),
+                    market_config=MarketObservationConfig(),
+                    bars=(
+                        MarketBar(
+                            symbol="SPY",
+                            session_date="2026-09-19",
+                            available_at="2026-09-19T21:00:00+00:00",
+                            close=100.0,
+                        ),
+                    ),
+                    market_source_ref="fixture:integration-company-market",
+                ),
+            ),
+            external_observations=(
+                ThemeScanObservation(
+                    theme_id=theme,
+                    as_of="2026-09-19",
+                    source_type="derived_feature",
+                    source_ref=f"fixture:{theme}:support",
+                    discovery_signal=1.0,
+                    structure_signal=1.0,
+                    persistence_signal=1.0,
+                    breadth_signal=1.0,
+                    relative_strength_signal=1.0,
+                    novelty_signal=1.0,
+                    support_direction=SupportDirection.SUPPORTING,
+                    evidence_refs=(f"fixture:{theme}:support",),
+                    is_independent=True,
+                    observed_or_inferred="observed",
+                ),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+    replay_archive = build_replay_archive_record(replay)
+    raw_policy = replace(
+        ResearchWorkOrderPolicy(),
+        industrials_company_dimensions=("growth",),
+        minimum_independent_sources=1,
+        minimum_independent_sources_per_company=1,
+    )
+    policy = replace(
+        raw_policy,
+        theme_reassessment_dimensions=tuple(
+            sorted(raw_policy.theme_reassessment_dimensions)
+        ),
+        industrials_company_dimensions=tuple(
+            sorted(raw_policy.industrials_company_dimensions)
+        ),
+        biotech_company_dimensions=tuple(
+            sorted(raw_policy.biotech_company_dimensions)
+        ),
+    )
+    order = build_research_work_order(
+        replay_archive,
+        theme,
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=package,
+        target_tickers=("AAA",),
+        policy=policy,
+    )
+    work_archive = build_research_work_order_archive_record(
+        replay_archive,
+        order,
+        work_order_policy=policy,
+    )
+    evidence_as_of = "2026-09-20T20:00:00+00:00"
+    evidence = EvidenceRecord(
+        evidence_id="ev:integration-company",
+        observed_at=evidence_as_of,
+        retrieved_at=evidence_as_of,
+        market_asof=None,
+        ticker="AAA",
+        theme=theme,
+        source_type="sec_filing",
+        source_ref="sec:AAA:integration",
+        fact_type="integration_company_fact",
+        payload={"revenue_growth": 0.2},
+        is_observed_fact=True,
+    ).with_hash()
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of=evidence_as_of,
+        closure=ResearchExecutionClosure.CLOSED,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=ResearchEvidenceDirection.SUPPORTING,
+                dimensions=("growth",),
+                target_ticker="AAA",
+            ),
+        ),
+        company_submissions=(
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of=evidence_as_of,
+                adapter_name="industrials_infrastructure",
+                raw_facts={"revenue_growth": 0.2},
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        ),
+        linkage_submissions=(
+            CompanyLinkageSubmission(
+                ticker="AAA",
+                linkage=LinkageResult(
+                    ticker="AAA",
+                    control_name="theme-minus-AAA",
+                    window=63,
+                    correlation=0.6,
+                    beta=0.9,
+                    r2=0.4,
+                    residual_mean=0.0,
+                    residual_vol=0.02,
+                    beta_stability=0.8,
+                    decoupling_score=0.3,
+                    circularity_warning=False,
+                    observations=63,
+                ),
+            ),
+        ),
+    )
+    assert dossier.status is ResearchDossierStatus.COMPLETE
+    record = build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+    )
+    return theme, record
+
+
+def _theme_not_ready_record():
+    theme, ready = _theme_ready_record()
+    order = ready.work_order_archive.work_order
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        closure=ResearchExecutionClosure.CLOSED,
+    )
+    record = build_research_dossier_archive_record(
+        ready.work_order_archive,
+        dossier,
+    )
+    return theme, record
+
+
+def _theme_orphan_ready_record():
+    theme, parent = _theme_ready_record()
+    order = parent.work_order_archive.work_order
+    evidence_as_of = "2026-09-21T20:00:00+00:00"
+    evidence = EvidenceRecord(
+        evidence_id="ev:integration-orphan",
+        observed_at=evidence_as_of,
+        retrieved_at=evidence_as_of,
+        market_asof=None,
+        ticker=None,
+        theme=theme,
+        source_type="official_macro",
+        source_ref="official:integration-orphan",
+        fact_type="integration_orphan_fact",
+        payload={"state": "ready"},
+        is_observed_fact=True,
+    ).with_hash()
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of=evidence_as_of,
+        closure=ResearchExecutionClosure.CLOSED,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=ResearchEvidenceDirection.SUPPORTING,
+                dimensions=tuple(
+                    requirement.dimension
+                    for requirement in order.requirements
+                ),
+                target_ticker=None,
+            ),
+        ),
+    )
+    child = build_research_dossier_archive_record(
+        parent.work_order_archive,
+        dossier,
+        prior_dossier_archive=parent,
+    )
+    return theme, child
+
+
+def test_not_ready_research_is_not_admitted():
+    theme, record = _theme_not_ready_record()
+
+    integration = evaluate_research_decision_integration(
+        (record,),
+        record.archive_record_hash,
+        requested_theme=theme,
+        requested_ticker="AAA",
+        tape=_tape(),
+        routing_inputs=_routing_inputs(),
+    )
+
+    assert (
+        integration.admission_status
+        is ResearchDecisionAdmissionStatus.RESEARCH_NOT_READY
+    )
+    assert integration.admitted_action is None
+    assert integration.market_action == "BUILD_ON_RETEST"
+
+
+def test_indeterminate_research_is_not_admitted():
+    theme, orphan = _theme_orphan_ready_record()
+
+    integration = evaluate_research_decision_integration(
+        (orphan,),
+        orphan.archive_record_hash,
+        requested_theme=theme,
+        requested_ticker="AAA",
+        tape=_tape(),
+        routing_inputs=_routing_inputs(),
+    )
+
+    assert (
+        integration.admission_status
+        is ResearchDecisionAdmissionStatus.RESEARCH_INDETERMINATE
+    )
+    assert integration.admitted_action is None
+
+
+def test_ready_theme_reassessment_is_scope_mismatch_for_ticker_decision():
+    theme, record = _theme_ready_record()
+
+    integration = evaluate_research_decision_integration(
+        (record,),
+        record.archive_record_hash,
+        requested_theme=theme,
+        requested_ticker="AAA",
+        tape=_tape(),
+        routing_inputs=_routing_inputs(),
+    )
+
+    assert (
+        integration.admission_status
+        is ResearchDecisionAdmissionStatus.RESEARCH_SCOPE_MISMATCH
+    )
+    assert integration.scope_mismatch_reasons == (
+        "company-level research is required",
+    )
+    assert integration.admitted_action is None
+
+
+def test_ready_company_research_requires_exact_theme_and_target_ticker():
+    theme, record = _company_ready_record()
+
+    wrong_both = evaluate_research_decision_integration(
+        (record,),
+        record.archive_record_hash,
+        requested_theme="WrongTheme",
+        requested_ticker="BBB",
+        tape=_tape(),
+        routing_inputs=_routing_inputs(),
+    )
+
+    assert (
+        wrong_both.admission_status
+        is ResearchDecisionAdmissionStatus.RESEARCH_SCOPE_MISMATCH
+    )
+    assert wrong_both.scope_mismatch_reasons == (
+        "decision theme does not match research work order",
+        "decision ticker is not a frozen research target",
+    )
+    assert wrong_both.admitted_action is None
+
+    correct = evaluate_research_decision_integration(
+        (record,),
+        record.archive_record_hash,
+        requested_theme=theme,
+        requested_ticker="aaa",
+        tape=_tape(),
+        routing_inputs=_routing_inputs(),
+    )
+
+    assert correct.admission_status is ResearchDecisionAdmissionStatus.ADMITTED
+    assert correct.scope_mismatch_reasons == ()
+    assert correct.requested_ticker == "AAA"
+    assert correct.admitted_action == correct.market_action
+
+
+def test_scope_mismatch_reasons_have_fixed_order():
+    theme, record = _theme_ready_record()
+
+    integration = evaluate_research_decision_integration(
+        (record,),
+        record.archive_record_hash,
+        requested_theme="WrongTheme",
+        requested_ticker="BBB",
+        tape=_tape(),
+        routing_inputs=_routing_inputs(),
+    )
+
+    assert integration.scope_mismatch_reasons == (
+        "company-level research is required",
+        "decision theme does not match research work order",
+        "decision ticker is not a frozen research target",
+    )
