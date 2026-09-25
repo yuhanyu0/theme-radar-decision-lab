@@ -83,7 +83,11 @@ def _package(theme="IntegrationTheme"):
     )
 
 
-def _source_observation(theme):
+def _source_observation(
+    theme,
+    *,
+    direction=SupportDirection.SUPPORTING,
+):
     return ThemeScanObservation(
         theme_id=theme,
         as_of="2026-09-19",
@@ -95,14 +99,17 @@ def _source_observation(theme):
         breadth_signal=1.0,
         relative_strength_signal=1.0,
         novelty_signal=1.0,
-        support_direction=SupportDirection.SUPPORTING,
+        support_direction=direction,
         evidence_refs=(f"fixture:{theme}",),
         is_independent=True,
         observed_or_inferred="observed",
     )
 
 
-def _replay_archive_and_package():
+def _replay_archive_and_package(
+    *,
+    direction=SupportDirection.SUPPORTING,
+):
     package = _package()
     theme = package.definition.theme_id
     result = run_replay_cycle(
@@ -132,7 +139,9 @@ def _replay_archive_and_package():
                     market_source_ref="fixture:integration-market",
                 ),
             ),
-            external_observations=(_source_observation(theme),),
+            external_observations=(
+                _source_observation(theme, direction=direction),
+            ),
             prior_scan_results=(),
             prior_allocations=(),
             scanner_config=ScannerConfig(),
@@ -180,7 +189,9 @@ def _company_work_order_archive(*, targets=("AAA",)):
 
 
 def _theme_work_order_archive():
-    replay_archive, package = _replay_archive_and_package()
+    replay_archive, package = _replay_archive_and_package(
+        direction=SupportDirection.CONTRADICTING,
+    )
     raw_policy = replace(
         ResearchWorkOrderPolicy(),
         minimum_independent_sources=1,
