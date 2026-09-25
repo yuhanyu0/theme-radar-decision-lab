@@ -154,6 +154,21 @@ def evaluate_research_decision_integration(
 
     routing = _route_from_tape(tape, routing_inputs)
 
+    scope_mismatch_reasons: list[str] = []
+    if readiness.status is ResearchDecisionReadinessStatus.READY:
+        if work_order.research_mode is not ResearchMode.COMPANY_DEEP_DIVE:
+            scope_mismatch_reasons.append(
+                "company-level research is required"
+            )
+        if theme != work_order.theme_id:
+            scope_mismatch_reasons.append(
+                "decision theme does not match research work order"
+            )
+        if ticker not in target_tickers:
+            scope_mismatch_reasons.append(
+                "decision ticker is not a frozen research target"
+            )
+
     if readiness.status is ResearchDecisionReadinessStatus.NOT_READY:
         admission = ResearchDecisionAdmissionStatus.RESEARCH_NOT_READY
     elif (
@@ -162,6 +177,10 @@ def evaluate_research_decision_integration(
     ):
         admission = (
             ResearchDecisionAdmissionStatus.RESEARCH_INDETERMINATE
+        )
+    elif scope_mismatch_reasons:
+        admission = (
+            ResearchDecisionAdmissionStatus.RESEARCH_SCOPE_MISMATCH
         )
     else:
         admission = ResearchDecisionAdmissionStatus.ADMITTED
@@ -180,7 +199,7 @@ def evaluate_research_decision_integration(
         requested_theme=theme,
         requested_ticker=ticker,
         admission_status=admission,
-        scope_mismatch_reasons=(),
+        scope_mismatch_reasons=tuple(scope_mismatch_reasons),
         tape=tape,
         tape_hash=canonical_hash(asdict(tape)),
         routing_inputs=routing_inputs,
