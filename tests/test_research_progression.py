@@ -4,11 +4,10 @@ from inspect import signature
 import pytest
 
 import decision_lab
-import decision_lab.research_progression as research_progression
+from decision_lab import research_progression
 
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.ledger import canonical_hash
-from decision_lab.linkage import LinkageResult
 from decision_lab.market_observation import (
     MarketBar,
     MarketObservationConfig,
@@ -381,7 +380,7 @@ def test_fork_is_reported_without_selecting_a_child():
 
 
 def test_resolved_parent_must_be_strictly_earlier():
-    work_archive, order, parent = _root(
+    work_archive, _, parent = _root(
         evidence_as_of="2026-09-21T20:00:00+00:00"
     )
     _, _, standalone_child = _root(
