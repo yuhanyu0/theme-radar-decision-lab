@@ -14,6 +14,7 @@ def compile_decision(
     *,
     decision_id: str,
     market_asof: str,
+    created_at: str | None = None,
     theme: str,
     ticker: str,
     theme_state: str,
@@ -43,12 +44,19 @@ def compile_decision(
     This function does not write to disk and never sends orders. The resulting object
     can be frozen with `write_immutable_json`.
     """
-    created_at = datetime.now(timezone.utc).isoformat()
+    if created_at is None:
+        resolved_created_at = datetime.now(timezone.utc).isoformat()
+    else:
+        if not isinstance(created_at, str):
+            raise TypeError("created_at must be a string")
+        resolved_created_at = created_at.strip()
+        if not resolved_created_at:
+            raise ValueError("created_at must be non-empty")
     playbook_scores = dict(routing.normalized_scores)
 
     decision = {
         "decision_id": decision_id,
-        "created_at": created_at,
+        "created_at": resolved_created_at,
         "market_asof": market_asof,
         "theme": theme,
         "ticker": ticker.upper(),
