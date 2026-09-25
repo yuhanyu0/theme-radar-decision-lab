@@ -807,4 +807,4 @@ def test_decision_contains_exact_supplied_tape_snapshot():
     assert result.decision["tape"]["state"] == tape.state
     assert result.decision["tape"]["stage"] == tape.stage
     assert result.decision["tape"]["support"] == tape.support
-    assert result.decision["tape"]["reasons"] == list(tape.reasons)
+    assert result.decision["tape"]["reasons"] == tape.reasons
