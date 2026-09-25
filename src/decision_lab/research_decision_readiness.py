@@ -159,9 +159,36 @@ def assess_research_decision_readiness(
         )
     candidate = candidate_snapshots[0]
 
+    candidate_is_leaf = candidate_archive_record_hash in report.leaves
+    matching_trajectories = tuple(
+        trajectory
+        for trajectory in report.trajectories
+        if trajectory.leaf_archive_record_hash
+        == candidate_archive_record_hash
+    )
+    if candidate_is_leaf:
+        if len(matching_trajectories) != 1:
+            raise ValueError(
+                "research decision readiness candidate trajectory is inconsistent"
+            )
+        lineage_complete = matching_trajectories[0].lineage_complete
+    else:
+        lineage_complete = False
+
+    competing_leaves = tuple(
+        sorted(
+            archive_hash
+            for archive_hash in report.leaves
+            if archive_hash != candidate_archive_record_hash
+        )
+    )
+    unique_observed_leaf = (
+        report.leaves == (candidate_archive_record_hash,)
+    )
+
     basic_pass = {
         ResearchDecisionReadinessGate.CANDIDATE_IS_LEAF: (
-            candidate_archive_record_hash in report.leaves
+            candidate_is_leaf
         ),
         ResearchDecisionReadinessGate.DOSSIER_COMPLETE: (
             candidate.status is ResearchDossierStatus.COMPLETE
@@ -169,12 +196,25 @@ def assess_research_decision_readiness(
         ResearchDecisionReadinessGate.EXECUTION_CLOSED: (
             candidate.closure is ResearchExecutionClosure.CLOSED
         ),
-        ResearchDecisionReadinessGate.NO_UNSATISFIED_REQUIREMENTS: True,
-        ResearchDecisionReadinessGate.NO_UNRESOLVED_FINDINGS: True,
-        ResearchDecisionReadinessGate.GLOBAL_SOURCE_MINIMUM_MET: True,
-        ResearchDecisionReadinessGate.COMPANY_SOURCE_MINIMUMS_MET: True,
-        ResearchDecisionReadinessGate.LINEAGE_COMPLETE: True,
-        ResearchDecisionReadinessGate.UNIQUE_OBSERVED_LEAF: True,
+        ResearchDecisionReadinessGate.NO_UNSATISFIED_REQUIREMENTS: (
+            not candidate.burden.unsatisfied_requirements
+        ),
+        ResearchDecisionReadinessGate.NO_UNRESOLVED_FINDINGS: (
+            not candidate.burden.unresolved_finding_ids
+        ),
+        ResearchDecisionReadinessGate.GLOBAL_SOURCE_MINIMUM_MET: (
+            candidate.burden.independent_source_deficit == 0
+        ),
+        ResearchDecisionReadinessGate.COMPANY_SOURCE_MINIMUMS_MET: all(
+            item.independent_source_deficit == 0
+            for item in candidate.burden.company_burdens
+        ),
+        ResearchDecisionReadinessGate.LINEAGE_COMPLETE: (
+            lineage_complete
+        ),
+        ResearchDecisionReadinessGate.UNIQUE_OBSERVED_LEAF: (
+            unique_observed_leaf
+        ),
     }
     gate_results = tuple(
         ResearchDecisionReadinessGateResult(
@@ -185,12 +225,6 @@ def assess_research_decision_readiness(
     )
     status, candidate_sufficient, selection_determinate = _status_from_gates(
         gate_results
-    )
-
-    competing_leaves = tuple(
-        archive_hash
-        for archive_hash in report.leaves
-        if archive_hash != candidate_archive_record_hash
     )
 
     seed = ResearchDecisionReadinessAssessment(
