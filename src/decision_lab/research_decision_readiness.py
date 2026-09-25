@@ -171,9 +171,15 @@ def assess_research_decision_readiness(
             raise ValueError(
                 "research decision readiness candidate trajectory is inconsistent"
             )
-        lineage_complete = matching_trajectories[0].lineage_complete
+        candidate_trajectory = matching_trajectories[0]
+        lineage_complete = candidate_trajectory.lineage_complete
+        execution_reopen_count = candidate_trajectory.execution_reopen_count
+        completion_loss_count = candidate_trajectory.completion_loss_count
     else:
+        candidate_trajectory = None
         lineage_complete = False
+        execution_reopen_count = 0
+        completion_loss_count = 0
 
     competing_leaves = tuple(
         sorted(
@@ -227,6 +233,21 @@ def assess_research_decision_readiness(
         gate_results
     )
 
+    company_cautions = tuple(
+        ResearchDecisionReadinessCompanyCaution(
+            ticker=company.ticker,
+            caution=caution,
+        )
+        for company in candidate.burden.company_burdens
+        for caution in company.cautions
+    )
+    company_cautions = tuple(
+        sorted(
+            company_cautions,
+            key=lambda item: (item.ticker, item.caution),
+        )
+    )
+
     seed = ResearchDecisionReadinessAssessment(
         policy_version=READINESS_POLICY_VERSION,
         policy_hash=READINESS_POLICY_HASH,
@@ -242,9 +263,9 @@ def assess_research_decision_readiness(
         gate_results=gate_results,
         competing_leaf_archive_record_hashes=competing_leaves,
         contradictions_present=candidate.burden.contradictions_present,
-        execution_reopen_count=0,
-        completion_loss_count=0,
-        company_cautions=(),
+        execution_reopen_count=execution_reopen_count,
+        completion_loss_count=completion_loss_count,
+        company_cautions=company_cautions,
         limitations=_LIMITATIONS,
         readiness_assessment_hash="0" * 64,
     )
