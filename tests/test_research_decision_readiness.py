@@ -1,6 +1,10 @@
 from dataclasses import fields, replace
+from inspect import signature
 
 import pytest
+
+import decision_lab
+from decision_lab import research_decision_readiness
 
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.linkage import LinkageResult
@@ -879,3 +883,66 @@ def test_readiness_limitations_keep_downstream_boundary_explicit():
     assert "Tape" in joined
     assert "playbook" in joined
     assert "no canonical fork or root is selected" in joined
+
+
+def test_increment11_public_exports_are_available_from_decision_lab():
+    names = (
+        "ResearchDecisionReadinessAssessment",
+        "ResearchDecisionReadinessCompanyCaution",
+        "ResearchDecisionReadinessGate",
+        "ResearchDecisionReadinessGateResult",
+        "ResearchDecisionReadinessStatus",
+        "assess_research_decision_readiness",
+    )
+
+    for name in names:
+        assert getattr(decision_lab, name) is getattr(
+            research_decision_readiness,
+            name,
+        )
+        assert name in decision_lab.__all__
+
+
+def test_increment8_to_10_public_exports_remain_available():
+    names = (
+        "ResearchDossier",
+        "ResearchWorkOrder",
+        "ResearchDossierArchiveRecord",
+        "ResearchWorkOrderArchiveRecord",
+        "ResearchProgressionReport",
+        "ResearchProgressionTrajectory",
+        "evaluate_research_progression",
+        "build_research_dossier",
+        "build_research_dossier_archive_record",
+    )
+
+    for name in names:
+        assert hasattr(decision_lab, name)
+        assert name in decision_lab.__all__
+
+
+def test_readiness_public_entry_point_has_only_explicit_inputs():
+    parameters = signature(
+        research_decision_readiness.assess_research_decision_readiness
+    ).parameters
+
+    assert tuple(parameters) == (
+        "records",
+        "candidate_archive_record_hash",
+    )
+
+
+def test_readiness_module_has_no_downstream_or_io_surface():
+    forbidden = (
+        "TapeAssessment",
+        "assess_tape_state",
+        "PlaybookRouting",
+        "route_playbooks",
+        "compile_decision",
+        "scan_research_decision_readiness",
+        "write_research_decision_readiness",
+        "research_decision_readiness_path",
+    )
+
+    for name in forbidden:
+        assert not hasattr(research_decision_readiness, name)
