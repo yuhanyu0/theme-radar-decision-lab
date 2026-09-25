@@ -5,7 +5,6 @@ import pytest
 
 import decision_lab
 from decision_lab import research_decision_readiness
-
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.linkage import LinkageResult
 from decision_lab.market_observation import (
@@ -25,11 +24,11 @@ from decision_lab.research_decision_readiness import (
 from decision_lab.research_execution import (
     CompanyLinkageSubmission,
     ResearchDossierStatus,
-    ResearchFinding,
-    ResearchFindingKind,
     ResearchEvidenceDirection,
     ResearchEvidenceInput,
     ResearchExecutionClosure,
+    ResearchFinding,
+    ResearchFindingKind,
     ResearchMode,
     ResearchWorkOrderPolicy,
     build_research_dossier,
