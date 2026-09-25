@@ -1,6 +1,10 @@
 from dataclasses import asdict, replace
+from inspect import signature
 
 import pytest
+
+import decision_lab
+from decision_lab import research_decision_integration
 
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.ledger import canonical_hash
@@ -905,3 +909,89 @@ def test_compilation_has_no_ledger_write_side_effect(tmp_path, monkeypatch):
 
     assert result.decision["decision_payload_hash"]
     assert tuple(tmp_path.iterdir()) == ()
+
+
+
+def test_increment12_public_exports_are_available_from_decision_lab():
+    names = (
+        "ResearchDecisionAdmission",
+        "ResearchDecisionAdmissionStatus",
+        "ResearchDecisionRoutingInputs",
+        "ResearchGatedDecisionCompilation",
+        "evaluate_research_decision_admission",
+        "compile_research_gated_decision",
+    )
+
+    for name in names:
+        assert getattr(decision_lab, name) is getattr(
+            research_decision_integration,
+            name,
+        )
+        assert name in decision_lab.__all__
+
+
+def test_increment8_to_11_public_exports_remain_available():
+    names = (
+        "ResearchDossier",
+        "ResearchDossierArchiveRecord",
+        "ResearchProgressionReport",
+        "ResearchDecisionReadinessAssessment",
+        "ResearchDecisionReadinessStatus",
+        "evaluate_research_progression",
+        "assess_research_decision_readiness",
+        "route_playbooks",
+        "compile_decision",
+    )
+
+    for name in names:
+        assert hasattr(decision_lab, name)
+        assert name in decision_lab.__all__
+
+
+def test_admission_public_signature_requires_explicit_target():
+    parameters = signature(
+        research_decision_integration.evaluate_research_decision_admission
+    ).parameters
+
+    assert tuple(parameters) == (
+        "records",
+        "readiness",
+        "ticker",
+    )
+
+
+def test_compilation_api_has_no_cross_context_override_inputs():
+    parameters = signature(
+        research_decision_integration.compile_research_gated_decision
+    ).parameters
+
+    assert "theme" not in parameters
+    assert "routing" not in parameters
+    assert "tape_state" not in parameters
+    assert "tape_stage" not in parameters
+    assert "world_confidence" not in parameters
+    assert "records" in parameters
+    assert "readiness" in parameters
+    assert "ticker" in parameters
+    assert "tape" in parameters
+    assert "theme_key" in parameters
+    assert "routing_inputs" in parameters
+
+
+def test_integration_module_has_no_execution_or_persistence_surface():
+    forbidden = (
+        "write_immutable_json",
+        "write_research_gated_decision",
+        "research_gated_decision_path",
+        "submit_order",
+        "send_order",
+        "execute_trade",
+        "place_order",
+        "assess_tape_state",
+        "admission_score",
+        "decision_score",
+        "combined_confidence",
+    )
+
+    for name in forbidden:
+        assert not hasattr(research_decision_integration, name)
