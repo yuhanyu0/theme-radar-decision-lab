@@ -1,8 +1,9 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
 from decision_lab.evidence import EvidenceRecord
+from decision_lab.ledger import canonical_hash
 from decision_lab.linkage import LinkageResult
 from decision_lab.market_observation import (
     MarketBar,
@@ -808,3 +809,99 @@ def test_decision_contains_exact_supplied_tape_snapshot():
     assert result.decision["tape"]["stage"] == tape.stage
     assert result.decision["tape"]["support"] == tape.support
     assert result.decision["tape"]["reasons"] == tape.reasons
+
+
+
+def test_compilation_preserves_exact_research_provenance():
+    kwargs = _compile_kwargs(
+        tape=_tape(state="clean_retest", stage="B3"),
+        theme_key=True,
+    )
+    result = compile_research_gated_decision(**kwargs)
+
+    assert (
+        result.readiness_assessment_hash
+        == kwargs["readiness"].readiness_assessment_hash
+    )
+    assert (
+        result.candidate_archive_record_hash
+        == kwargs["readiness"].candidate_archive_record_hash
+    )
+    assert result.work_order_hash == result.admission.work_order_hash
+    assert result.theme_id == result.admission.theme_id
+    assert result.ticker == result.admission.ticker
+
+
+def test_compilation_preserves_exact_child_components_and_reason():
+    tape = _tape(state="reclaim", stage="B2")
+    kwargs = _compile_kwargs(tape=tape, theme_key=True)
+    result = compile_research_gated_decision(**kwargs)
+
+    assert result.admission.status is ResearchDecisionAdmissionStatus.ADMITTED
+    assert result.tape == tape
+    assert result.decision["action"] == result.routing.action
+    assert (
+        result.decision["strongest_reason_not_to_trade"]
+        == kwargs["strongest_reason_not_to_trade"]
+    )
+    assert result.decision["theme"] == result.theme_id
+    assert result.decision["ticker"] == result.ticker
+
+
+def test_child_decision_payload_hash_still_uses_existing_compiler_semantics():
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=_tape(state="reclaim", stage="B2"),
+            theme_key=True,
+        )
+    )
+    payload = dict(result.decision)
+    decision_hash = payload.pop("decision_payload_hash")
+
+    assert decision_hash == canonical_hash(payload)
+
+
+def test_compilation_hash_covers_exact_integration_payload():
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=_tape(state="clean_retest", stage="B3"),
+            theme_key=True,
+            routing_inputs=ResearchDecisionRoutingInputs(
+                fundamentals_intact=True,
+                world_confidence="high",
+            ),
+        )
+    )
+    payload = asdict(result)
+    actual_hash = payload.pop("compilation_hash")
+
+    assert actual_hash == result.compilation_hash
+    assert actual_hash == canonical_hash(payload)
+    assert len(actual_hash) == 64
+
+
+def test_compilation_is_an_event_and_keeps_existing_created_at():
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=_tape(state="reclaim", stage="B2"),
+            theme_key=True,
+        )
+    )
+
+    assert result.decision["created_at"]
+    assert result.decision["decision_payload_hash"]
+    assert "created_at" in result.decision
+
+
+def test_compilation_has_no_ledger_write_side_effect(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=_tape(state="reclaim", stage="B2"),
+            theme_key=True,
+        )
+    )
+
+    assert result.decision["decision_payload_hash"]
+    assert tuple(tmp_path.iterdir()) == ()
