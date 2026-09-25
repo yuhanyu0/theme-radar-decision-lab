@@ -2,17 +2,45 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
+from enum import Enum
 
 from .ledger import canonical_hash
 from .research_execution import (
+    CompanyLinkageStatus,
     ResearchDossierStatus,
     ResearchExecutionClosure,
+    ResearchRequirement,
 )
 from .research_execution_archive import (
     ResearchDossierArchiveRecord,
     _parse_utc,
     _validate_dossier_archive_record,
 )
+
+
+class ResearchExecutionClosureTransition(str, Enum):
+    OPEN_TO_OPEN = "OPEN_TO_OPEN"
+    OPEN_TO_CLOSED = "OPEN_TO_CLOSED"
+    CLOSED_TO_OPEN = "CLOSED_TO_OPEN"
+    CLOSED_TO_CLOSED = "CLOSED_TO_CLOSED"
+
+
+@dataclass(frozen=True)
+class ResearchCompanyBurden:
+    ticker: str
+    independent_source_deficit: int
+    linkage_status: CompanyLinkageStatus
+    cautions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ResearchUnresolvedBurden:
+    archive_record_hash: str
+    unsatisfied_requirements: tuple[ResearchRequirement, ...]
+    unresolved_finding_ids: tuple[str, ...]
+    contradictions_present: bool
+    independent_source_deficit: int
+    company_burdens: tuple[ResearchCompanyBurden, ...]
 
 
 @dataclass(frozen=True)
@@ -34,12 +62,34 @@ class ResearchProgressionSnapshot:
     evidence_as_of: str
     closure: ResearchExecutionClosure
     status: ResearchDossierStatus
+    burden: ResearchUnresolvedBurden
 
 
 @dataclass(frozen=True)
 class ResearchProgressionTransition:
     parent_archive_record_hash: str
     child_archive_record_hash: str
+    parent_evidence_as_of: str
+    child_evidence_as_of: str
+    elapsed_seconds: float
+    closure_transition: ResearchExecutionClosureTransition
+    parent_status: ResearchDossierStatus
+    child_status: ResearchDossierStatus
+    became_complete: bool
+    lost_complete_status: bool
+    newly_satisfied_requirements: tuple[ResearchRequirement, ...]
+    newly_unsatisfied_requirements: tuple[ResearchRequirement, ...]
+    still_satisfied_requirements: tuple[ResearchRequirement, ...]
+    still_unsatisfied_requirements: tuple[ResearchRequirement, ...]
+    added_evidence_source_hashes: tuple[str, ...]
+    removed_evidence_source_hashes: tuple[str, ...]
+    added_finding_ids: tuple[str, ...]
+    removed_finding_ids: tuple[str, ...]
+    changed_finding_ids: tuple[str, ...]
+    contradictions_before: bool
+    contradictions_after: bool
+    unresolved_before: bool
+    unresolved_after: bool
 
 
 @dataclass(frozen=True)
@@ -62,6 +112,181 @@ def _report_payload_without_hash(
     payload = asdict(report)
     payload.pop("progression_report_hash")
     return payload
+
+
+def _closure_transition(
+    parent: ResearchExecutionClosure,
+    child: ResearchExecutionClosure,
+) -> ResearchExecutionClosureTransition:
+    return ResearchExecutionClosureTransition(
+        f"{parent.value}_TO_{child.value}"
+    )
+
+
+def _build_burden(
+    record: ResearchDossierArchiveRecord,
+) -> ResearchUnresolvedBurden:
+    dossier = record.dossier
+    order = record.work_order_archive.work_order
+
+    unresolved_finding_ids = tuple(
+        finding.finding_id
+        for finding in dossier.findings
+        if finding.kind.value == "UNRESOLVED"
+    )
+    company_burdens = tuple(
+        ResearchCompanyBurden(
+            ticker=assessment.ticker,
+            independent_source_deficit=max(
+                0,
+                order.minimum_independent_sources_per_company
+                - assessment.independent_source_count,
+            ),
+            linkage_status=assessment.linkage_status,
+            cautions=assessment.cautions,
+        )
+        for assessment in sorted(
+            dossier.company_assessments,
+            key=lambda item: item.ticker,
+        )
+    )
+    return ResearchUnresolvedBurden(
+        archive_record_hash=record.archive_record_hash,
+        unsatisfied_requirements=dossier.unsatisfied_requirements,
+        unresolved_finding_ids=unresolved_finding_ids,
+        contradictions_present=dossier.contradictions_present,
+        independent_source_deficit=max(
+            0,
+            order.minimum_independent_sources
+            - dossier.independent_source_count,
+        ),
+        company_burdens=company_burdens,
+    )
+
+
+def _requirement_partition_transition(
+    parent: ResearchDossierArchiveRecord,
+    child: ResearchDossierArchiveRecord,
+) -> tuple[
+    tuple[ResearchRequirement, ...],
+    tuple[ResearchRequirement, ...],
+    tuple[ResearchRequirement, ...],
+    tuple[ResearchRequirement, ...],
+]:
+    requirements = parent.work_order_archive.work_order.requirements
+    parent_satisfied = set(parent.dossier.satisfied_requirements)
+    child_satisfied = set(child.dossier.satisfied_requirements)
+
+    newly_satisfied = tuple(
+        item
+        for item in requirements
+        if item not in parent_satisfied and item in child_satisfied
+    )
+    newly_unsatisfied = tuple(
+        item
+        for item in requirements
+        if item in parent_satisfied and item not in child_satisfied
+    )
+    still_satisfied = tuple(
+        item
+        for item in requirements
+        if item in parent_satisfied and item in child_satisfied
+    )
+    still_unsatisfied = tuple(
+        item
+        for item in requirements
+        if item not in parent_satisfied and item not in child_satisfied
+    )
+    return (
+        newly_satisfied,
+        newly_unsatisfied,
+        still_satisfied,
+        still_unsatisfied,
+    )
+
+
+def _build_transition(
+    parent: ResearchDossierArchiveRecord,
+    child: ResearchDossierArchiveRecord,
+) -> ResearchProgressionTransition:
+    (
+        newly_satisfied,
+        newly_unsatisfied,
+        still_satisfied,
+        still_unsatisfied,
+    ) = _requirement_partition_transition(parent, child)
+
+    parent_evidence_hashes = {
+        binding.evidence.source_hash
+        for binding in parent.dossier.evidence_bindings
+    }
+    child_evidence_hashes = {
+        binding.evidence.source_hash
+        for binding in child.dossier.evidence_bindings
+    }
+
+    parent_findings = {
+        finding.finding_id: finding
+        for finding in parent.dossier.findings
+    }
+    child_findings = {
+        finding.finding_id: finding
+        for finding in child.dossier.findings
+    }
+    parent_ids = set(parent_findings)
+    child_ids = set(child_findings)
+    changed_ids = tuple(
+        sorted(
+            finding_id
+            for finding_id in parent_ids & child_ids
+            if parent_findings[finding_id]
+            != child_findings[finding_id]
+        )
+    )
+
+    parent_status = parent.dossier.status
+    child_status = child.dossier.status
+    parent_time = _parse_utc(parent.evidence_as_of)
+    child_time = _parse_utc(child.evidence_as_of)
+
+    return ResearchProgressionTransition(
+        parent_archive_record_hash=parent.archive_record_hash,
+        child_archive_record_hash=child.archive_record_hash,
+        parent_evidence_as_of=parent.evidence_as_of,
+        child_evidence_as_of=child.evidence_as_of,
+        elapsed_seconds=(child_time - parent_time).total_seconds(),
+        closure_transition=_closure_transition(
+            parent.dossier.closure,
+            child.dossier.closure,
+        ),
+        parent_status=parent_status,
+        child_status=child_status,
+        became_complete=(
+            parent_status is not ResearchDossierStatus.COMPLETE
+            and child_status is ResearchDossierStatus.COMPLETE
+        ),
+        lost_complete_status=(
+            parent_status is ResearchDossierStatus.COMPLETE
+            and child_status is not ResearchDossierStatus.COMPLETE
+        ),
+        newly_satisfied_requirements=newly_satisfied,
+        newly_unsatisfied_requirements=newly_unsatisfied,
+        still_satisfied_requirements=still_satisfied,
+        still_unsatisfied_requirements=still_unsatisfied,
+        added_evidence_source_hashes=tuple(
+            sorted(child_evidence_hashes - parent_evidence_hashes)
+        ),
+        removed_evidence_source_hashes=tuple(
+            sorted(parent_evidence_hashes - child_evidence_hashes)
+        ),
+        added_finding_ids=tuple(sorted(child_ids - parent_ids)),
+        removed_finding_ids=tuple(sorted(parent_ids - child_ids)),
+        changed_finding_ids=changed_ids,
+        contradictions_before=parent.dossier.contradictions_present,
+        contradictions_after=child.dossier.contradictions_present,
+        unresolved_before=parent.dossier.unresolved_present,
+        unresolved_after=child.dossier.unresolved_present,
+    )
 
 
 def evaluate_research_progression(
@@ -143,10 +368,7 @@ def evaluate_research_progression(
 
         children[parent_hash].append(child_hash)
         transitions.append(
-            ResearchProgressionTransition(
-                parent_archive_record_hash=parent_hash,
-                child_archive_record_hash=child_hash,
-            )
+            _build_transition(parent, child)
         )
 
     for child_hashes in children.values():
@@ -177,6 +399,7 @@ def evaluate_research_progression(
             evidence_as_of=record.evidence_as_of,
             closure=record.dossier.closure,
             status=record.dossier.status,
+            burden=_build_burden(record),
         )
         for record in sorted(
             validated,
@@ -191,12 +414,8 @@ def evaluate_research_progression(
         sorted(
             transitions,
             key=lambda item: (
-                _parse_utc(
-                    nodes[item.parent_archive_record_hash].evidence_as_of
-                ),
-                _parse_utc(
-                    nodes[item.child_archive_record_hash].evidence_as_of
-                ),
+                _parse_utc(item.parent_evidence_as_of),
+                _parse_utc(item.child_evidence_as_of),
                 item.parent_archive_record_hash,
                 item.child_archive_record_hash,
             ),
