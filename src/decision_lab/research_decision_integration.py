@@ -212,6 +212,13 @@ def compile_research_gated_decision(
     )
     if admission.status is not ResearchDecisionAdmissionStatus.ADMITTED:
         raise ValueError("research admission is not ADMITTED")
+    if linkage is not None:
+        if not isinstance(linkage, LinkageResult):
+            raise TypeError("linkage must be LinkageResult")
+        if linkage.ticker.strip().upper() != admission.ticker:
+            raise ValueError(
+                "linkage ticker does not match admission target"
+            )
     if not isinstance(tape, TapeAssessment):
         raise TypeError("tape must be TapeAssessment")
     if not isinstance(theme_key, bool):
