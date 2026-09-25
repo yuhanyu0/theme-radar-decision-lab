@@ -1,0 +1,20 @@
+name: Research decision integration lint
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Ruff
+        run: python -m pip install ruff
+      - name: Ruff changed Python files
+        run: |
+          ruff check src/decision_lab/research_decision_integration.py src/decision_lab/__init__.py tests/test_research_decision_integration.py
