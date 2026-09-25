@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
+from itertools import pairwise
 
 from .ledger import canonical_hash
 from .research_execution import (
@@ -357,7 +358,7 @@ def _build_trajectory(
 
     reopen_count = 0
     completion_loss_count = 0
-    for parent, child in zip(records, records[1:]):
+    for parent, child in pairwise(records):
         if (
             parent.dossier.closure
             is ResearchExecutionClosure.CLOSED
