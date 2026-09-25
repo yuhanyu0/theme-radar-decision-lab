@@ -1,6 +1,10 @@
 from dataclasses import asdict, fields, replace
+from inspect import signature
 
 import pytest
+
+import decision_lab
+import decision_lab.research_progression as research_progression
 
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.ledger import canonical_hash
@@ -1186,3 +1190,70 @@ def test_trajectory_order_and_report_hash_ignore_input_order():
     assert first == second
     assert first.trajectories == second.trajectories
     assert first.progression_report_hash == second.progression_report_hash
+
+
+
+def test_progression_public_exports_are_available_from_decision_lab():
+    names = (
+        "ResearchCompanyBurden",
+        "ResearchExecutionClosureTransition",
+        "ResearchProgressionFork",
+        "ResearchProgressionOrphan",
+        "ResearchProgressionReport",
+        "ResearchProgressionSnapshot",
+        "ResearchProgressionTrajectory",
+        "ResearchProgressionTransition",
+        "ResearchUnresolvedBurden",
+        "evaluate_research_progression",
+    )
+
+    for name in names:
+        assert getattr(decision_lab, name) is getattr(
+            research_progression,
+            name,
+        )
+        assert name in decision_lab.__all__
+
+
+def test_increment9_archive_public_exports_remain_available():
+    names = (
+        "ResearchArchiveDestinationVisibility",
+        "ResearchArchiveWriteResult",
+        "ResearchDossierArchiveRecord",
+        "ResearchWorkOrderArchiveRecord",
+        "build_research_dossier_archive_record",
+        "build_research_work_order_archive_record",
+        "read_research_dossier_archive",
+        "read_research_work_order_archive",
+        "research_dossier_archive_path",
+        "research_work_order_archive_path",
+        "verify_research_dossier_archive",
+        "verify_research_work_order_archive",
+        "write_research_dossier_archive",
+        "write_research_work_order_archive",
+    )
+
+    for name in names:
+        assert hasattr(decision_lab, name)
+        assert name in decision_lab.__all__
+
+
+def test_progression_public_entry_point_accepts_only_typed_record_sequence():
+    parameters = signature(
+        research_progression.evaluate_research_progression
+    ).parameters
+
+    assert tuple(parameters) == ("records",)
+
+
+def test_progression_module_exposes_no_scan_or_write_surface():
+    forbidden = (
+        "scan_research_progression",
+        "scan_research_archives",
+        "write_research_progression",
+        "write_research_progression_report",
+        "research_progression_path",
+    )
+
+    for name in forbidden:
+        assert not hasattr(research_progression, name)
