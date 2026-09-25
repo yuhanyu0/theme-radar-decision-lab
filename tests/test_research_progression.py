@@ -150,6 +150,7 @@ def _work_order_archive(*, minimum_independent_sources=1):
         replay_archive,
         theme,
         ResearchMode.THEME_REASSESSMENT,
+        theme_package=package,
         policy=policy,
     )
     archive = build_research_work_order_archive_record(
