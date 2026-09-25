@@ -995,3 +995,18 @@ def test_integration_module_has_no_execution_or_persistence_surface():
 
     for name in forbidden:
         assert not hasattr(research_decision_integration, name)
+
+
+
+def test_compilation_rejects_cross_target_linkage_provenance():
+    kwargs = _compile_kwargs(
+        tape=_tape(state="reclaim", stage="B2"),
+        theme_key=True,
+    )
+    kwargs["linkage"] = _usable_linkage("BBB")
+
+    with pytest.raises(
+        ValueError,
+        match="linkage ticker does not match admission target",
+    ):
+        compile_research_gated_decision(**kwargs)
