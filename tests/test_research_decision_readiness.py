@@ -3,6 +3,7 @@ from dataclasses import fields, replace
 import pytest
 
 from decision_lab.evidence import EvidenceRecord
+from decision_lab.linkage import LinkageResult
 from decision_lab.market_observation import (
     MarketBar,
     MarketObservationConfig,
@@ -18,6 +19,7 @@ from decision_lab.research_decision_readiness import (
     assess_research_decision_readiness,
 )
 from decision_lab.research_execution import (
+    CompanyLinkageSubmission,
     ResearchDossierStatus,
     ResearchFinding,
     ResearchFindingKind,
@@ -778,3 +780,102 @@ def test_competing_leaves_are_sorted_deterministically():
             )
         )
     )
+
+
+def test_historical_reopen_and_completion_loss_are_visible_not_blocking():
+    work_archive, order = _work_order_archive()
+    root = _archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        complete=True,
+        closure=ResearchExecutionClosure.CLOSED,
+    )
+    regressed = _archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        complete=False,
+        closure=ResearchExecutionClosure.OPEN,
+        parent=root,
+    )
+    candidate = _archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+        complete=True,
+        closure=ResearchExecutionClosure.CLOSED,
+        parent=regressed,
+    )
+
+    assessment = assess_research_decision_readiness(
+        (candidate, root, regressed),
+        candidate.archive_record_hash,
+    )
+
+    assert assessment.status is ResearchDecisionReadinessStatus.READY
+    assert assessment.execution_reopen_count == 1
+    assert assessment.completion_loss_count == 1
+    assert assessment.candidate_sufficient
+    assert assessment.selection_determinate
+
+
+def test_company_cautions_are_preserved_and_sorted_without_hidden_gate():
+    work_archive, order = _company_work_order_archive()
+    pending_linkage = LinkageResult(
+        ticker="AAA",
+        control_name="theme-minus-AAA",
+        window=63,
+        correlation=None,
+        beta=None,
+        r2=None,
+        residual_mean=None,
+        residual_vol=None,
+        beta_stability=None,
+        decoupling_score=None,
+        circularity_warning=False,
+        observations=10,
+    )
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        closure=ResearchExecutionClosure.CLOSED,
+        linkage_submissions=(
+            CompanyLinkageSubmission(
+                ticker="AAA",
+                linkage=pending_linkage,
+            ),
+        ),
+    )
+    candidate = build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+    )
+
+    assessment = assess_research_decision_readiness(
+        (candidate,),
+        candidate.archive_record_hash,
+    )
+
+    assert tuple(
+        (item.ticker, item.caution)
+        for item in assessment.company_cautions
+    ) == (
+        ("AAA", "independent source minimum not met"),
+        ("AAA", "linkage coverage pending"),
+    )
+
+
+def test_readiness_limitations_keep_downstream_boundary_explicit():
+    _, _, candidate = _ready_root()
+
+    assessment = assess_research_decision_readiness(
+        (candidate,),
+        candidate.archive_record_hash,
+    )
+    joined = " ".join(assessment.limitations)
+
+    assert "not trading permission" in joined
+    assert "Tape" in joined
+    assert "playbook" in joined
+    assert "no canonical fork or root is selected" in joined
