@@ -1,9 +1,10 @@
-from dataclasses import asdict, replace
+from dataclasses import asdict, fields, replace
 
 import pytest
 
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.ledger import canonical_hash
+from decision_lab.linkage import LinkageResult
 from decision_lab.market_observation import (
     MarketBar,
     MarketObservationConfig,
@@ -14,9 +15,14 @@ from decision_lab.replay import ReplayCycleInput, ThemeReplayInput, run_replay_c
 from decision_lab.replay_archive import build_replay_archive_record
 from decision_lab.research_budget import ResearchBudgetConfig
 from decision_lab.research_execution import (
+    CompanyLinkageStatus,
+    CompanyResearchSubmission,
+    ResearchDossierStatus,
     ResearchEvidenceDirection,
     ResearchEvidenceInput,
     ResearchExecutionClosure,
+    ResearchFinding,
+    ResearchFindingKind,
     ResearchMode,
     ResearchWorkOrderPolicy,
     build_research_dossier,
@@ -396,3 +402,493 @@ def test_input_permutation_has_identical_report_and_hash():
 
     assert first == second
     assert first.progression_report_hash == second.progression_report_hash
+
+
+
+def _theme_archive_record(
+    work_archive,
+    order,
+    *,
+    evidence_as_of,
+    dimensions,
+    direction=ResearchEvidenceDirection.SUPPORTING,
+    closure=ResearchExecutionClosure.OPEN,
+    finding_id=None,
+    finding_statement=None,
+    unresolved=False,
+    parent=None,
+):
+    evidence = _evidence(
+        evidence_as_of=evidence_as_of,
+        suffix=f"{evidence_as_of}:{direction.value}",
+    )
+    findings = ()
+    if unresolved:
+        findings = (
+            ResearchFinding(
+                finding_id=finding_id or f"unresolved:{evidence_as_of}",
+                kind=ResearchFindingKind.UNRESOLVED,
+                direction=None,
+                dimension=dimensions[0],
+                target_ticker=None,
+                statement=finding_statement or "open question remains",
+                evidence_source_hashes=(),
+            ),
+        )
+    elif finding_id is not None:
+        findings = (
+            ResearchFinding(
+                finding_id=finding_id,
+                kind=ResearchFindingKind.OBSERVED_SYNTHESIS,
+                direction=direction,
+                dimension=dimensions[0],
+                target_ticker=None,
+                statement=finding_statement or "observed synthesis",
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        )
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of=evidence_as_of,
+        closure=closure,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=direction,
+                dimensions=tuple(dimensions),
+                target_ticker=None,
+            ),
+        ),
+        findings=findings,
+    )
+    return build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+        prior_dossier_archive=parent,
+    )
+
+
+def _company_work_order_archive():
+    package = _package()
+    theme = package.definition.theme_id
+    replay = run_replay_cycle(
+        ReplayCycleInput(
+            cycle_as_of="2026-09-19",
+            themes=(
+                ThemeReplayInput(
+                    package=package,
+                    market_spec=MarketObservationSpec(
+                        theme_id=theme,
+                        mode=MarketObservationMode.BASKET,
+                        benchmark="SPY",
+                        current_return_sessions=1,
+                        prior_return_sessions=1,
+                        min_basket_members=1,
+                        version="progression-company-test",
+                    ),
+                    market_config=MarketObservationConfig(),
+                    bars=(
+                        MarketBar(
+                            symbol="SPY",
+                            session_date="2026-09-19",
+                            available_at="2026-09-19T21:00:00+00:00",
+                            close=100.0,
+                        ),
+                    ),
+                    market_source_ref="fixture:progression-company-market",
+                ),
+            ),
+            external_observations=(
+                ThemeScanObservation(
+                    theme_id=theme,
+                    as_of="2026-09-19",
+                    source_type="derived_feature",
+                    source_ref=f"fixture:{theme}:support",
+                    discovery_signal=1.0,
+                    structure_signal=1.0,
+                    persistence_signal=1.0,
+                    breadth_signal=1.0,
+                    relative_strength_signal=1.0,
+                    novelty_signal=1.0,
+                    support_direction=SupportDirection.SUPPORTING,
+                    evidence_refs=(f"fixture:{theme}:support",),
+                    is_independent=True,
+                    observed_or_inferred="observed",
+                ),
+            ),
+            prior_scan_results=(),
+            prior_allocations=(),
+            scanner_config=ScannerConfig(),
+            budget_config=ResearchBudgetConfig(),
+        )
+    )
+    replay_archive = build_replay_archive_record(replay)
+    raw_policy = replace(
+        ResearchWorkOrderPolicy(),
+        industrials_company_dimensions=("growth",),
+        minimum_independent_sources=1,
+        minimum_independent_sources_per_company=2,
+    )
+    policy = replace(
+        raw_policy,
+        theme_reassessment_dimensions=tuple(
+            sorted(raw_policy.theme_reassessment_dimensions)
+        ),
+        industrials_company_dimensions=tuple(
+            sorted(raw_policy.industrials_company_dimensions)
+        ),
+        biotech_company_dimensions=tuple(
+            sorted(raw_policy.biotech_company_dimensions)
+        ),
+    )
+    order = build_research_work_order(
+        replay_archive,
+        theme,
+        ResearchMode.COMPANY_DEEP_DIVE,
+        theme_package=package,
+        target_tickers=("AAA",),
+        policy=policy,
+    )
+    return (
+        build_research_work_order_archive_record(
+            replay_archive,
+            order,
+            work_order_policy=policy,
+        ),
+        order,
+    )
+
+
+def _company_burden_record():
+    work_archive, order = _company_work_order_archive()
+    raw = EvidenceRecord(
+        evidence_id="ev:company-burden",
+        observed_at="2026-09-20T20:00:00+00:00",
+        retrieved_at="2026-09-20T20:00:00+00:00",
+        market_asof=None,
+        ticker="AAA",
+        theme="ProgressionTheme",
+        source_type="sec_filing",
+        source_ref="sec:AAA:burden",
+        fact_type="company_progression_fact",
+        payload={"revenue_growth": 0.2},
+        is_observed_fact=True,
+    )
+    evidence = raw.with_hash()
+    dossier = build_research_dossier(
+        order,
+        evidence_as_of="2026-09-20T21:00:00+00:00",
+        closure=ResearchExecutionClosure.OPEN,
+        evidence_inputs=(
+            ResearchEvidenceInput(
+                evidence=evidence,
+                independent=True,
+                direction=ResearchEvidenceDirection.SUPPORTING,
+                dimensions=("growth",),
+                target_ticker="AAA",
+            ),
+        ),
+        company_submissions=(
+            CompanyResearchSubmission(
+                ticker="AAA",
+                as_of="2026-09-20T20:30:00+00:00",
+                adapter_name="industrials_infrastructure",
+                raw_facts={"revenue_growth": 0.2},
+                evidence_source_hashes=(evidence.source_hash,),
+            ),
+        ),
+    )
+    record = build_research_dossier_archive_record(
+        work_archive,
+        dossier,
+    )
+    return record
+
+
+def test_transition_reports_open_to_closed_separately_from_complete():
+    work_archive, order = _work_order_archive()
+    all_dimensions = tuple(item.dimension for item in order.requirements)
+    parent = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=all_dimensions,
+        closure=ResearchExecutionClosure.OPEN,
+    )
+    child = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=all_dimensions,
+        closure=ResearchExecutionClosure.CLOSED,
+        parent=parent,
+    )
+
+    report = evaluate_research_progression((parent, child))
+    transition = report.transitions[0]
+
+    assert transition.closure_transition.value == "OPEN_TO_CLOSED"
+    assert transition.parent_status is ResearchDossierStatus.COMPLETE
+    assert transition.child_status is ResearchDossierStatus.COMPLETE
+    assert not transition.became_complete
+    assert not transition.lost_complete_status
+    assert transition.elapsed_seconds == 86400.0
+
+
+def test_transition_reports_closed_to_open_as_execution_reopening():
+    work_archive, order = _work_order_archive()
+    all_dimensions = tuple(item.dimension for item in order.requirements)
+    parent = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=all_dimensions,
+        closure=ResearchExecutionClosure.CLOSED,
+    )
+    child = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(order.requirements[0].dimension,),
+        closure=ResearchExecutionClosure.OPEN,
+        parent=parent,
+    )
+
+    transition = evaluate_research_progression(
+        (parent, child)
+    ).transitions[0]
+
+    assert transition.closure_transition.value == "CLOSED_TO_OPEN"
+    assert transition.parent_status is ResearchDossierStatus.COMPLETE
+    assert transition.child_status is ResearchDossierStatus.PARTIAL
+    assert transition.lost_complete_status
+
+
+def test_transition_reports_requirement_progress_and_regression():
+    work_archive, order = _work_order_archive()
+    first = order.requirements[0]
+    remaining = tuple(order.requirements[1:])
+    parent = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(first.dimension,),
+    )
+    child = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=tuple(item.dimension for item in order.requirements),
+        parent=parent,
+    )
+
+    forward = evaluate_research_progression(
+        (parent, child)
+    ).transitions[0]
+
+    assert forward.newly_satisfied_requirements == remaining
+    assert forward.newly_unsatisfied_requirements == ()
+    assert forward.still_satisfied_requirements == (first,)
+    assert forward.still_unsatisfied_requirements == ()
+    assert forward.became_complete
+    assert not forward.lost_complete_status
+
+    regressed = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+        dimensions=(first.dimension,),
+        parent=child,
+    )
+    backward = evaluate_research_progression(
+        (child, regressed)
+    ).transitions[0]
+
+    assert backward.newly_satisfied_requirements == ()
+    assert backward.newly_unsatisfied_requirements == remaining
+    assert backward.still_satisfied_requirements == (first,)
+    assert backward.still_unsatisfied_requirements == ()
+    assert not backward.became_complete
+    assert backward.lost_complete_status
+
+
+def test_transition_reports_added_and_removed_evidence_hashes():
+    work_archive, order = _work_order_archive()
+    parent = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(order.requirements[0].dimension,),
+    )
+    child = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(order.requirements[0].dimension,),
+        parent=parent,
+    )
+
+    transition = evaluate_research_progression(
+        (parent, child)
+    ).transitions[0]
+    parent_hash = parent.dossier.evidence_bindings[0].evidence.source_hash
+    child_hash = child.dossier.evidence_bindings[0].evidence.source_hash
+
+    assert transition.added_evidence_source_hashes == (child_hash,)
+    assert transition.removed_evidence_source_hashes == (parent_hash,)
+
+
+def test_transition_reports_added_removed_and_changed_findings():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    parent = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+        finding_id="finding:stable-id",
+        finding_statement="initial statement",
+    )
+    changed = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(dimension,),
+        finding_id="finding:stable-id",
+        finding_statement="revised statement",
+        parent=parent,
+    )
+
+    first_transition = evaluate_research_progression(
+        (parent, changed)
+    ).transitions[0]
+
+    assert first_transition.added_finding_ids == ()
+    assert first_transition.removed_finding_ids == ()
+    assert first_transition.changed_finding_ids == ("finding:stable-id",)
+
+    removed = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+        dimensions=(dimension,),
+        parent=changed,
+    )
+    removal = evaluate_research_progression(
+        (changed, removed)
+    ).transitions[0]
+
+    assert removal.added_finding_ids == ()
+    assert removal.removed_finding_ids == ("finding:stable-id",)
+    assert removal.changed_finding_ids == ()
+
+
+def test_transition_describes_new_contradiction_without_rejecting_it():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    parent = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+        direction=ResearchEvidenceDirection.SUPPORTING,
+    )
+    child = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(dimension,),
+        direction=ResearchEvidenceDirection.CONTRADICTING,
+        parent=parent,
+    )
+
+    transition = evaluate_research_progression(
+        (parent, child)
+    ).transitions[0]
+
+    assert not transition.contradictions_before
+    assert transition.contradictions_after
+
+
+def test_transition_describes_new_unresolved_state_without_rejecting_it():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    parent = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+    )
+    child = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(dimension,),
+        unresolved=True,
+        parent=parent,
+    )
+
+    transition = evaluate_research_progression(
+        (parent, child)
+    ).transitions[0]
+
+    assert not transition.unresolved_before
+    assert transition.unresolved_after
+
+
+def test_snapshot_burden_exposes_requirement_and_source_deficits_as_vector():
+    work_archive, order = _work_order_archive(
+        minimum_independent_sources=2
+    )
+    record = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(order.requirements[0].dimension,),
+    )
+
+    report = evaluate_research_progression((record,))
+    snapshot = report.snapshots[0]
+    burden = snapshot.burden
+
+    assert burden.archive_record_hash == record.archive_record_hash
+    assert burden.unsatisfied_requirements == tuple(
+        order.requirements[1:]
+    )
+    assert burden.unresolved_finding_ids == ()
+    assert not burden.contradictions_present
+    assert burden.independent_source_deficit == 1
+    assert burden.company_burdens == ()
+
+
+def test_company_burden_preserves_deficit_linkage_state_and_cautions():
+    record = _company_burden_record()
+
+    report = evaluate_research_progression((record,))
+    burden = report.snapshots[0].burden
+
+    assert len(burden.company_burdens) == 1
+    company = burden.company_burdens[0]
+    assert company.ticker == "AAA"
+    assert company.independent_source_deficit == 1
+    assert company.linkage_status is CompanyLinkageStatus.NOT_PROVIDED
+    assert company.cautions == ("independent source minimum not met",)
+
+
+def test_progression_has_no_scalar_progress_or_burden_score():
+    _, _, root = _root()
+    report = evaluate_research_progression((root,))
+
+    report_fields = {item.name for item in fields(report)}
+    snapshot_fields = {item.name for item in fields(report.snapshots[0])}
+
+    assert "progress_score" not in report_fields
+    assert "score" not in report_fields
+    assert "burden" in snapshot_fields
+
+    burden_fields = {
+        item.name for item in fields(report.snapshots[0].burden)
+    }
+    assert "score" not in burden_fields
+    assert "burden_score" not in burden_fields
