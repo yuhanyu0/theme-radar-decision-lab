@@ -58,9 +58,23 @@ class ResearchDecisionRoutingInputs:
 @dataclass(frozen=True)
 class ResearchGatedDecisionCompilation:
     admission: ResearchDecisionAdmission
+    readiness_assessment_hash: str
+    candidate_archive_record_hash: str
+    work_order_hash: str
+    theme_id: str
+    ticker: str
     tape: TapeAssessment
     routing: PlaybookRouting
     decision: dict[str, Any]
+    compilation_hash: str
+
+
+def _compilation_payload_without_hash(
+    compilation: ResearchGatedDecisionCompilation,
+) -> dict[str, object]:
+    payload = asdict(compilation)
+    payload.pop("compilation_hash")
+    return payload
 
 
 def _admission_payload_without_hash(
@@ -250,9 +264,23 @@ def compile_research_gated_decision(
         evidence_refs=evidence_refs,
         source_timestamps=source_timestamps,
     )
-    return ResearchGatedDecisionCompilation(
+    seed = ResearchGatedDecisionCompilation(
         admission=admission,
+        readiness_assessment_hash=readiness.readiness_assessment_hash,
+        candidate_archive_record_hash=(
+            readiness.candidate_archive_record_hash
+        ),
+        work_order_hash=admission.work_order_hash,
+        theme_id=admission.theme_id,
+        ticker=admission.ticker,
         tape=tape,
         routing=routing,
         decision=decision,
+        compilation_hash="0" * 64,
+    )
+    return replace(
+        seed,
+        compilation_hash=canonical_hash(
+            _compilation_payload_without_hash(seed)
+        ),
     )
