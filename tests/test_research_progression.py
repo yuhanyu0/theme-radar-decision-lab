@@ -892,3 +892,297 @@ def test_progression_has_no_scalar_progress_or_burden_score():
     }
     assert "score" not in burden_fields
     assert "burden_score" not in burden_fields
+
+
+
+def test_linear_root_to_leaf_builds_one_maximal_trajectory():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    root = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+    )
+    child = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(dimension,),
+        parent=root,
+    )
+    leaf = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+        dimensions=(dimension,),
+        parent=child,
+    )
+
+    report = evaluate_research_progression((leaf, root, child))
+
+    assert len(report.trajectories) == 1
+    trajectory = report.trajectories[0]
+    assert trajectory.archive_record_hashes == (
+        root.archive_record_hash,
+        child.archive_record_hash,
+        leaf.archive_record_hash,
+    )
+    assert trajectory.start_archive_record_hash == root.archive_record_hash
+    assert trajectory.leaf_archive_record_hash == leaf.archive_record_hash
+    assert trajectory.starts_at_root
+    assert not trajectory.starts_at_orphan
+    assert trajectory.lineage_complete
+
+
+def test_fork_builds_one_maximal_trajectory_per_leaf():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    root = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+    )
+    child_a = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(dimension,),
+        parent=root,
+    )
+    child_b = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+        dimensions=(dimension,),
+        parent=root,
+    )
+
+    report = evaluate_research_progression(
+        (child_b, root, child_a)
+    )
+
+    assert len(report.trajectories) == 2
+    paths = {
+        trajectory.archive_record_hashes
+        for trajectory in report.trajectories
+    }
+    assert paths == {
+        (root.archive_record_hash, child_a.archive_record_hash),
+        (root.archive_record_hash, child_b.archive_record_hash),
+    }
+
+
+def test_multiple_roots_remain_separate_trajectories():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    root_a = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+    )
+    root_b = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(dimension,),
+    )
+
+    report = evaluate_research_progression((root_b, root_a))
+
+    assert len(report.trajectories) == 2
+    assert {
+        trajectory.archive_record_hashes
+        for trajectory in report.trajectories
+    } == {
+        (root_a.archive_record_hash,),
+        (root_b.archive_record_hash,),
+    }
+    assert all(
+        trajectory.starts_at_root
+        and trajectory.lineage_complete
+        for trajectory in report.trajectories
+    )
+
+
+def test_orphan_begins_incomplete_trajectory_boundary():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    parent = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+    )
+    orphan = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=tuple(item.dimension for item in order.requirements),
+        closure=ResearchExecutionClosure.CLOSED,
+        parent=parent,
+    )
+
+    report = evaluate_research_progression((orphan,))
+
+    assert len(report.trajectories) == 1
+    trajectory = report.trajectories[0]
+    assert trajectory.archive_record_hashes == (
+        orphan.archive_record_hash,
+    )
+    assert not trajectory.starts_at_root
+    assert trajectory.starts_at_orphan
+    assert not trajectory.lineage_complete
+    assert (
+        trajectory.time_from_source_to_first_execution_closure_seconds
+        is None
+    )
+    assert trajectory.time_from_source_to_first_complete_seconds is None
+
+
+def test_root_trajectory_times_first_closure_and_complete_separately():
+    work_archive, order = _work_order_archive()
+    first = order.requirements[0].dimension
+    all_dimensions = tuple(
+        item.dimension for item in order.requirements
+    )
+    root = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(first,),
+        closure=ResearchExecutionClosure.OPEN,
+    )
+    closed = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(first,),
+        closure=ResearchExecutionClosure.CLOSED,
+        parent=root,
+    )
+    complete = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+        dimensions=all_dimensions,
+        closure=ResearchExecutionClosure.OPEN,
+        parent=closed,
+    )
+
+    trajectory = evaluate_research_progression(
+        (complete, root, closed)
+    ).trajectories[0]
+
+    assert (
+        trajectory.first_execution_closed_at
+        == closed.evidence_as_of
+    )
+    assert trajectory.first_complete_at == complete.evidence_as_of
+    assert (
+        trajectory.time_from_source_to_first_execution_closure_seconds
+        == pytest.approx(158400.000001)
+    )
+    assert (
+        trajectory.time_from_source_to_first_complete_seconds
+        == pytest.approx(244800.000001)
+    )
+    assert trajectory.execution_reopen_count == 1
+    assert trajectory.completion_loss_count == 0
+
+
+def test_trajectory_without_closure_or_complete_has_none_timings():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    root = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+    )
+    leaf = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(dimension,),
+        parent=root,
+    )
+
+    trajectory = evaluate_research_progression(
+        (root, leaf)
+    ).trajectories[0]
+
+    assert trajectory.first_execution_closed_at is None
+    assert trajectory.first_complete_at is None
+    assert (
+        trajectory.time_from_source_to_first_execution_closure_seconds
+        is None
+    )
+    assert trajectory.time_from_source_to_first_complete_seconds is None
+
+
+def test_completion_loss_is_counted_without_invalidating_trajectory():
+    work_archive, order = _work_order_archive()
+    all_dimensions = tuple(
+        item.dimension for item in order.requirements
+    )
+    first = order.requirements[0].dimension
+    complete = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=all_dimensions,
+    )
+    regressed = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(first,),
+        parent=complete,
+    )
+
+    trajectory = evaluate_research_progression(
+        (regressed, complete)
+    ).trajectories[0]
+
+    assert trajectory.first_complete_at == complete.evidence_as_of
+    assert trajectory.completion_loss_count == 1
+    assert trajectory.execution_reopen_count == 0
+
+
+def test_trajectory_order_and_report_hash_ignore_input_order():
+    work_archive, order = _work_order_archive()
+    dimension = order.requirements[0].dimension
+    root = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        dimensions=(dimension,),
+    )
+    child_a = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-21T20:00:00+00:00",
+        dimensions=(dimension,),
+        parent=root,
+    )
+    child_b = _theme_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-22T20:00:00+00:00",
+        dimensions=(dimension,),
+        parent=root,
+    )
+
+    first = evaluate_research_progression(
+        (root, child_a, child_b)
+    )
+    second = evaluate_research_progression(
+        (child_b, root, child_a)
+    )
+
+    assert first == second
+    assert first.trajectories == second.trajectories
+    assert first.progression_report_hash == second.progression_report_hash
