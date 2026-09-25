@@ -5,7 +5,6 @@ import pytest
 
 import decision_lab
 from decision_lab import research_decision_integration
-
 from decision_lab.evidence import EvidenceRecord
 from decision_lab.ledger import canonical_hash
 from decision_lab.linkage import LinkageResult
@@ -15,6 +14,7 @@ from decision_lab.market_observation import (
     MarketObservationMode,
     MarketObservationSpec,
 )
+from decision_lab.playbooks import route_playbooks
 from decision_lab.replay import ReplayCycleInput, ThemeReplayInput, run_replay_cycle
 from decision_lab.replay_archive import build_replay_archive_record
 from decision_lab.research_budget import ResearchBudgetConfig
@@ -24,7 +24,6 @@ from decision_lab.research_decision_integration import (
     compile_research_gated_decision,
     evaluate_research_decision_admission,
 )
-from decision_lab.playbooks import route_playbooks
 from decision_lab.research_decision_readiness import (
     ResearchDecisionReadinessStatus,
     assess_research_decision_readiness,
@@ -49,13 +48,13 @@ from decision_lab.scanner import (
     SupportDirection,
     ThemeScanObservation,
 )
+from decision_lab.tape import TapeAssessment
 from decision_lab.themes import (
     ThemeDefinition,
     ThemeKeyPolicy,
     ThemeLifecycleState,
     ThemePackage,
 )
-from decision_lab.tape import TapeAssessment
 from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
 
