@@ -13,7 +13,6 @@ from .research_execution_archive import ResearchDossierArchiveRecord
 from .research_progression import evaluate_research_progression
 
 
-
 READINESS_POLICY_VERSION = "0.1"
 
 
