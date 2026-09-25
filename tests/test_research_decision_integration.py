@@ -15,8 +15,11 @@ from decision_lab.replay_archive import build_replay_archive_record
 from decision_lab.research_budget import ResearchBudgetConfig
 from decision_lab.research_decision_integration import (
     ResearchDecisionAdmissionStatus,
+    ResearchDecisionRoutingInputs,
+    compile_research_gated_decision,
     evaluate_research_decision_admission,
 )
+from decision_lab.playbooks import route_playbooks
 from decision_lab.research_decision_readiness import (
     ResearchDecisionReadinessStatus,
     assess_research_decision_readiness,
@@ -47,6 +50,7 @@ from decision_lab.themes import (
     ThemeLifecycleState,
     ThemePackage,
 )
+from decision_lab.tape import TapeAssessment
 from decision_lab.universe import Candidate, ThemeLayer, ThemeUniverse
 
 
@@ -595,3 +599,212 @@ def test_multi_target_work_order_never_auto_selects_target():
     assert aaa.ticker == "AAA"
     assert bbb.ticker == "BBB"
     assert aaa.admission_hash != bbb.admission_hash
+
+
+
+def _tape(*, state="reclaim", stage="B2"):
+    return TapeAssessment(
+        state=state,
+        stage=stage,
+        support=90.0,
+        reclaim=100.0,
+        pivot=105.0,
+        invalidation=85.0,
+        higher_low=stage in {"B2", "B3"},
+        new_low_recently=state == "falling_knife",
+        volume_confirmation=False,
+        volatility_contraction=False,
+        relative_strength_positive=True,
+        reasons=("fixture tape",),
+    )
+
+
+def _compile_kwargs(*, tape, theme_key=True, routing_inputs=None):
+    _, _, record, readiness = _company_ready_root()
+    return {
+        "records": (record,),
+        "readiness": readiness,
+        "ticker": "AAA",
+        "tape": tape,
+        "theme_key": theme_key,
+        "routing_inputs": (
+            ResearchDecisionRoutingInputs(world_confidence="high")
+            if routing_inputs is None
+            else routing_inputs
+        ),
+        "decision_id": "decision-integration-001",
+        "market_asof": "2026-09-24T20:00:00+00:00",
+        "theme_state": "confirmed",
+        "company_state": "researched",
+        "strongest_reason_not_to_trade": "execution risk remains",
+        "model_version": "integration-v0.1",
+        "config_payload": {"fixture": True},
+    }
+
+
+def test_blocked_research_admission_cannot_compile_decision():
+    work_archive, order = _company_work_order_archive()
+    candidate = _company_archive_record(
+        work_archive,
+        order,
+        evidence_as_of="2026-09-20T20:00:00+00:00",
+        closure=ResearchExecutionClosure.OPEN,
+        complete=True,
+    )
+    readiness = assess_research_decision_readiness(
+        (candidate,),
+        candidate.archive_record_hash,
+    )
+    assert readiness.status is ResearchDecisionReadinessStatus.NOT_READY
+
+    with pytest.raises(ValueError, match="research admission is not ADMITTED"):
+        compile_research_gated_decision(
+            records=(candidate,),
+            readiness=readiness,
+            ticker="AAA",
+            tape=_tape(),
+            theme_key=True,
+            routing_inputs=ResearchDecisionRoutingInputs(
+                world_confidence="high"
+            ),
+            decision_id="decision-blocked-001",
+            market_asof="2026-09-24T20:00:00+00:00",
+            theme_state="confirmed",
+            company_state="researched",
+            strongest_reason_not_to_trade="research is open",
+            model_version="integration-v0.1",
+            config_payload={"fixture": True},
+        )
+
+
+def test_routing_is_derived_from_exact_tape_and_inputs():
+    tape = _tape(state="reclaim", stage="B2")
+    routing_inputs = ResearchDecisionRoutingInputs(
+        fundamentals_intact=True,
+        world_confidence="high",
+    )
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=tape,
+            theme_key=True,
+            routing_inputs=routing_inputs,
+        )
+    )
+    direct = route_playbooks(
+        theme_key=True,
+        tape_state=tape.state,
+        tape_stage=tape.stage,
+        fundamentals_intact=True,
+        world_confidence="high",
+    )
+
+    assert result.routing == direct
+    assert result.decision["playbooks"]["scores"] == dict(
+        direct.normalized_scores
+    )
+    assert result.decision["playbooks"]["raw_scores"] == dict(
+        direct.raw_scores
+    )
+    assert result.decision["playbooks"]["selected"] == direct.selected_playbook
+    assert result.decision["action"] == direct.action
+
+
+def test_theme_key_is_shared_by_router_and_decision():
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=_tape(state="reclaim", stage="B2"),
+            theme_key=False,
+        )
+    )
+
+    assert result.decision["theme_key"] is False
+    assert result.routing.action == "WATCH_ONLY"
+    assert result.decision["action"] == "WATCH_ONLY"
+
+
+def test_world_confidence_is_shared_by_router_and_decision():
+    routing_inputs = ResearchDecisionRoutingInputs(
+        fundamentals_intact=True,
+        world_confidence="low",
+    )
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=_tape(state="reclaim", stage="B2"),
+            theme_key=True,
+            routing_inputs=routing_inputs,
+        )
+    )
+    direct = route_playbooks(
+        theme_key=True,
+        tape_state="reclaim",
+        tape_stage="B2",
+        fundamentals_intact=True,
+        world_confidence="low",
+    )
+
+    assert result.routing == direct
+    assert result.decision["world_confidence"] == "low"
+
+
+def test_ready_research_does_not_override_falling_knife_block():
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=_tape(state="falling_knife", stage="B0"),
+            theme_key=True,
+        )
+    )
+
+    assert result.routing.selected_playbook == "NoTrade"
+    assert result.routing.action == "BLOCKED"
+    assert result.decision["action"] == "BLOCKED"
+
+
+def test_ready_research_preserves_clean_retest_build_action():
+    routing_inputs = ResearchDecisionRoutingInputs(
+        fundamentals_intact=True,
+        world_confidence="high",
+    )
+    result = compile_research_gated_decision(
+        **_compile_kwargs(
+            tape=_tape(state="clean_retest", stage="B3"),
+            theme_key=True,
+            routing_inputs=routing_inputs,
+        )
+    )
+    direct = route_playbooks(
+        theme_key=True,
+        tape_state="clean_retest",
+        tape_stage="B3",
+        fundamentals_intact=True,
+        world_confidence="high",
+    )
+
+    assert direct.action == "BUILD_ON_RETEST"
+    assert result.routing == direct
+    assert result.decision["action"] == direct.action
+
+
+def test_decision_theme_and_ticker_come_from_admission_binding():
+    kwargs = _compile_kwargs(
+        tape=_tape(state="reclaim", stage="B2"),
+        theme_key=True,
+    )
+    result = compile_research_gated_decision(**kwargs)
+
+    assert result.decision["theme"] == result.admission.theme_id
+    assert result.decision["ticker"] == result.admission.ticker
+    assert result.decision["theme"] == "IntegrationTheme"
+    assert result.decision["ticker"] == "AAA"
+
+
+def test_decision_contains_exact_supplied_tape_snapshot():
+    tape = _tape(state="clean_retest", stage="B3")
+    result = compile_research_gated_decision(
+        **_compile_kwargs(tape=tape, theme_key=True)
+    )
+
+    assert result.tape == tape
+    assert result.decision["tape"]["state"] == tape.state
+    assert result.decision["tape"]["stage"] == tape.stage
+    assert result.decision["tape"]["support"] == tape.support
+    assert result.decision["tape"]["reasons"] == list(tape.reasons)
