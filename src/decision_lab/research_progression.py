@@ -93,6 +93,22 @@ class ResearchProgressionTransition:
 
 
 @dataclass(frozen=True)
+class ResearchProgressionTrajectory:
+    archive_record_hashes: tuple[str, ...]
+    start_archive_record_hash: str
+    leaf_archive_record_hash: str
+    starts_at_root: bool
+    starts_at_orphan: bool
+    lineage_complete: bool
+    first_execution_closed_at: str | None
+    first_complete_at: str | None
+    time_from_source_to_first_execution_closure_seconds: float | None
+    time_from_source_to_first_complete_seconds: float | None
+    execution_reopen_count: int
+    completion_loss_count: int
+
+
+@dataclass(frozen=True)
 class ResearchProgressionReport:
     work_order_archive_record_hash: str
     work_order_hash: str
@@ -103,6 +119,7 @@ class ResearchProgressionReport:
     orphans: tuple[ResearchProgressionOrphan, ...]
     forks: tuple[ResearchProgressionFork, ...]
     leaves: tuple[str, ...]
+    trajectories: tuple[ResearchProgressionTrajectory, ...]
     progression_report_hash: str
 
 
@@ -289,6 +306,116 @@ def _build_transition(
     )
 
 
+def _maximal_paths(
+    start_hash: str,
+    children: dict[str, list[str]],
+) -> tuple[tuple[str, ...], ...]:
+    paths: list[tuple[str, ...]] = []
+
+    def visit(
+        current_hash: str,
+        prefix: tuple[str, ...],
+    ) -> None:
+        next_hashes = children[current_hash]
+        current_path = prefix + (current_hash,)
+        if not next_hashes:
+            paths.append(current_path)
+            return
+        for child_hash in next_hashes:
+            visit(child_hash, current_path)
+
+    visit(start_hash, ())
+    return tuple(paths)
+
+
+def _build_trajectory(
+    archive_hashes: tuple[str, ...],
+    *,
+    nodes: dict[str, ResearchDossierArchiveRecord],
+    starts_at_root: bool,
+    starts_at_orphan: bool,
+) -> ResearchProgressionTrajectory:
+    records = tuple(nodes[archive_hash] for archive_hash in archive_hashes)
+    first_closed = next(
+        (
+            record
+            for record in records
+            if record.dossier.closure
+            is ResearchExecutionClosure.CLOSED
+        ),
+        None,
+    )
+    first_complete = next(
+        (
+            record
+            for record in records
+            if record.dossier.status
+            is ResearchDossierStatus.COMPLETE
+        ),
+        None,
+    )
+
+    reopen_count = 0
+    completion_loss_count = 0
+    for parent, child in zip(records, records[1:]):
+        if (
+            parent.dossier.closure
+            is ResearchExecutionClosure.CLOSED
+            and child.dossier.closure
+            is ResearchExecutionClosure.OPEN
+        ):
+            reopen_count += 1
+        if (
+            parent.dossier.status
+            is ResearchDossierStatus.COMPLETE
+            and child.dossier.status
+            is not ResearchDossierStatus.COMPLETE
+        ):
+            completion_loss_count += 1
+
+    source_as_of = _parse_utc(
+        records[0].work_order_archive.source_cycle_as_of
+    )
+    closure_seconds = None
+    complete_seconds = None
+    if starts_at_root:
+        if first_closed is not None:
+            closure_seconds = (
+                _parse_utc(first_closed.evidence_as_of)
+                - source_as_of
+            ).total_seconds()
+        if first_complete is not None:
+            complete_seconds = (
+                _parse_utc(first_complete.evidence_as_of)
+                - source_as_of
+            ).total_seconds()
+
+    return ResearchProgressionTrajectory(
+        archive_record_hashes=archive_hashes,
+        start_archive_record_hash=archive_hashes[0],
+        leaf_archive_record_hash=archive_hashes[-1],
+        starts_at_root=starts_at_root,
+        starts_at_orphan=starts_at_orphan,
+        lineage_complete=starts_at_root,
+        first_execution_closed_at=(
+            None
+            if first_closed is None
+            else first_closed.evidence_as_of
+        ),
+        first_complete_at=(
+            None
+            if first_complete is None
+            else first_complete.evidence_as_of
+        ),
+        time_from_source_to_first_execution_closure_seconds=(
+            closure_seconds
+        ),
+        time_from_source_to_first_complete_seconds=complete_seconds,
+        execution_reopen_count=reopen_count,
+        completion_loss_count=completion_loss_count,
+    )
+
+
 def evaluate_research_progression(
     records: Sequence[ResearchDossierArchiveRecord],
 ) -> ResearchProgressionReport:
@@ -431,6 +558,37 @@ def evaluate_research_progression(
         )
     )
 
+    trajectories: list[ResearchProgressionTrajectory] = []
+    for root_hash in sorted(roots):
+        for path in _maximal_paths(root_hash, children):
+            trajectories.append(
+                _build_trajectory(
+                    path,
+                    nodes=nodes,
+                    starts_at_root=True,
+                    starts_at_orphan=False,
+                )
+            )
+    for orphan in orphans_tuple:
+        for path in _maximal_paths(
+            orphan.child_archive_record_hash,
+            children,
+        ):
+            trajectories.append(
+                _build_trajectory(
+                    path,
+                    nodes=nodes,
+                    starts_at_root=False,
+                    starts_at_orphan=True,
+                )
+            )
+    trajectories_tuple = tuple(
+        sorted(
+            trajectories,
+            key=lambda item: item.archive_record_hashes,
+        )
+    )
+
     seed = ResearchProgressionReport(
         work_order_archive_record_hash=(
             work_order_archive.archive_record_hash
@@ -443,6 +601,7 @@ def evaluate_research_progression(
         orphans=orphans_tuple,
         forks=forks,
         leaves=leaves,
+        trajectories=trajectories_tuple,
         progression_report_hash="0" * 64,
     )
     return replace(
