@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from decision_lab.linkage import LinkageResult
 from decision_lab.tape import TapeAssessment
 from experiments.repricing_graph_v0_1.case_io import load_shadow_case
@@ -10,8 +12,10 @@ from experiments.repricing_graph_v0_1.gap import calculate_expectation_gap
 from experiments.repricing_graph_v0_1.shadow_case import (
     compile_shadow_repricing_decision,
 )
+from experiments.repricing_graph_v0_1.template import load_etn_template
 
 CASE_PATH = Path(__file__).with_name("cases") / "ETN_2026Q2_shadow.yaml"
+TEMPLATE_PATH = Path(__file__).with_name("datacenter_etn_template.yaml")
 
 
 def _context(*, causal=True, tape_stage="B3"):
@@ -109,3 +113,35 @@ def test_case_hash_is_deterministic_for_identical_frozen_inputs():
     first = compile_shadow_repricing_decision(case=case, gap=gap, context=_context())
     second = compile_shadow_repricing_decision(case=case, gap=gap, context=_context())
     assert first.case_hash == second.case_hash
+
+
+def test_company_guidance_baseline_cannot_be_promoted_as_model_derived_candidate():
+    case = load_shadow_case(CASE_PATH)
+    gap = calculate_expectation_gap(case.our_expectation, case.market_expectation)
+    decision = compile_shadow_repricing_decision(
+        case=case,
+        gap=gap,
+        context=_context(),
+        graph=load_etn_template(TEMPLATE_PATH),
+    )
+    assert decision.status == "RESEARCHING"
+    assert "our expectation is not transmission-derived" in decision.warnings
+
+
+def test_compiler_rejects_case_bound_to_different_graph():
+    case = load_shadow_case(CASE_PATH)
+    gap = calculate_expectation_gap(case.our_expectation, case.market_expectation)
+    graph = load_etn_template(TEMPLATE_PATH)
+    graph = type(graph)(
+        graph_id="different-graph",
+        as_of=graph.as_of,
+        nodes=graph.nodes,
+        edges=graph.edges,
+    )
+    with pytest.raises(ValueError, match="graph"):
+        compile_shadow_repricing_decision(
+            case=case,
+            gap=gap,
+            context=_context(),
+            graph=graph,
+        )
