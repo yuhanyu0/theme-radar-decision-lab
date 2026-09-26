@@ -51,8 +51,8 @@
   - `NodeType`
   - `EdgeType`
   - `EdgeStatus`
-  - `EstimateKind`
-  - `MarketExpectationMethod`
+  - `EstimateKind` with exactly `POINT` and `INTERVAL`
+  - `MarketExpectationMethod` with exactly `SELL_SIDE_CONSENSUS`, `COMPANY_GUIDANCE`, and `PRICE_IMPLIED`
   - `GraphNode`
   - `GraphEdge`
   - `RealityEstimate`
@@ -74,7 +74,7 @@ Tests must assert:
 - graph edges reject empty evidence/provenance;
 - statistical linkage alone cannot validate an `EXPOSES` edge;
 - estimates reject `available_at > as_of`;
-- RepricingCase rejects ticker other than `ETN` in the first vertical-slice profile;
+- generic RepricingCase validation remains ticker-agnostic; ETN-only scope is enforced later by the vertical-slice profile validator;
 - scenario weights must be non-negative and cannot be called calibrated probabilities unless `probability_is_calibrated=True`.
 
 - [ ] **Step 2: Run Task 1 tests and retain RED evidence**
@@ -116,6 +116,7 @@ Expected: all Task 1 tests pass.
   - `ScenarioReturn`
 - Produces:
   - `ExpectationGap`
+  - `ScenarioSummary`
   - `calculate_expectation_gap(ours: RealityEstimate, market: MarketExpectation) -> ExpectationGap`
   - `summarize_scenarios(scenarios: tuple[ScenarioReturn, ...]) -> ScenarioSummary`
 
@@ -240,6 +241,7 @@ Run:
 - Produces:
   - `load_shadow_case(path: str | Path) -> RepricingCase`
   - `validate_point_in_time_case(case: RepricingCase) -> None`
+  - `validate_etn_vertical_slice_case(case: RepricingCase, package: ThemePackage) -> None`
 
 The source file must record every input as:
 
@@ -266,6 +268,8 @@ The Market expectation input must be one of:
 - [ ] **Step 1: Write failing PIT-contract tests**
 
 Tests must reject:
+- a vertical-slice case whose ticker is not exactly `ETN`;
+- a vertical-slice case whose theme/layer is not `DataCenter_Infra/electrical_switchgear`;
 - evidence available after case `as_of`;
 - missing source/provenance;
 - current consensus with no historical availability timestamp;
@@ -287,7 +291,7 @@ Use primary/company sources where possible. Record source URLs and availability 
 
 - [ ] **Step 4: Implement the loader/validator and make the case load successfully**
 
-The loader performs validation only; it must not fetch the web at runtime.
+The loader performs validation only; it must not fetch the web at runtime. Generic `validate_repricing_case` remains reusable; ETN/theme/layer restrictions live only in `validate_etn_vertical_slice_case`.
 
 - [ ] **Step 5: Run Task 1–4 tests to GREEN**
 
