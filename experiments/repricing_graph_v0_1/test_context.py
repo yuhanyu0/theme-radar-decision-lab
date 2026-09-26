@@ -119,3 +119,29 @@ def test_statistical_linkage_without_economic_evidence_is_not_causal_proof():
     )
     assert context.causal_exposure_validated is False
     assert "economic exposure evidence missing" in context.warnings
+
+
+def test_context_rejects_price_rows_after_case_asof_even_if_batch_timestamp_claims_old():
+    returns, ohlcv, benchmark = _market_inputs()
+    future_day = pd.Timestamp("2026-09-28")
+    returns.loc[future_day] = 0.01
+    ohlcv.loc[future_day] = {
+        "Open": 130.0,
+        "High": 132.0,
+        "Low": 129.0,
+        "Close": 131.0,
+        "Volume": 2_000_000.0,
+    }
+    benchmark.loc[future_day] = 120.0
+    with pytest.raises(ValueError, match="future market rows"):
+        build_repricing_context(
+            target="ETN",
+            members=["ETN", "GEV", "POWL", "NVT"],
+            returns=returns,
+            ohlcv=ohlcv,
+            benchmark_close=benchmark,
+            as_of="2026-09-25T20:00:00+00:00",
+            market_data_available_at="2026-09-25T20:00:00+00:00",
+            market_observation_ref="obs:datacenter",
+            economic_exposure_evidence_refs=("etn_q2_release",),
+        )
