@@ -1,0 +1,134 @@
+version: "0.1"
+theme_id: DataCenter_Infra
+target: ETN
+layer: electrical_switchgear
+primary_fundamental_variable: ETN_FY2026_ADJUSTED_EPS
+as_of: "2026-09-25T20:00:00+00:00"
+
+nodes:
+  - node_id: hyperscaler_ai_datacenter_capex
+    node_type: WORLD_STATE
+    label: Hyperscaler AI data-center capex
+    as_of: "2026-09-25T20:00:00+00:00"
+    evidence_refs: ["theme:DataCenter_Infra:thesis"]
+    provenance: ["config/themes/datacenter_infra.yaml"]
+  - node_id: datacenter_power_demand
+    node_type: WORLD_STATE
+    label: Data-center power demand
+    as_of: "2026-09-25T20:00:00+00:00"
+    evidence_refs: ["theme:DataCenter_Infra:economic_chain"]
+    provenance: ["config/themes/datacenter_infra.yaml"]
+  - node_id: electrical_distribution_demand
+    node_type: THEME_LAYER_STATE
+    label: Electrical distribution and switchgear demand
+    as_of: "2026-09-25T20:00:00+00:00"
+    evidence_refs: ["theme:DataCenter_Infra:electrical_switchgear"]
+    provenance: ["config/datacenter_seed.example.yaml"]
+  - node_id: ETN_electrical_americas
+    node_type: COMPANY_EXPOSURE
+    label: Eaton Electrical Americas exposure
+    as_of: "2026-09-25T20:00:00+00:00"
+    evidence_refs:
+      - "https://www.sec.gov/Archives/edgar/data/1551182/000155118226000027/etn06302026exhibit99.htm"
+    provenance: ["primary:ETN:Q2-2026"]
+  - node_id: ETN_FY2026_ADJUSTED_EPS
+    node_type: COMPANY_KPI
+    label: Eaton FY2026 adjusted EPS
+    as_of: "2026-09-25T20:00:00+00:00"
+    evidence_refs:
+      - "https://www.sec.gov/Archives/edgar/data/1551182/000155118226000027/etn06302026exhibit99.htm"
+    provenance: ["primary:ETN:Q2-2026"]
+  - node_id: ETN_next_earnings
+    node_type: CATALYST
+    label: Eaton next earnings and guidance update
+    as_of: "2026-09-25T20:00:00+00:00"
+    evidence_refs: ["company:ETN:quarterly-earnings-process"]
+    provenance: ["https://www.eaton.com/us/en-us/company/investor-relations.html"]
+  - node_id: ETN_market_FY2026_ADJUSTED_EPS
+    node_type: MARKET_EXPECTATION
+    label: Market expectation for Eaton FY2026 adjusted EPS
+    as_of: "2026-09-25T20:00:00+00:00"
+    evidence_refs: ["case-input:market-expectation-required"]
+    provenance: ["method:to-be-frozen-in-shadow-case"]
+  - node_id: ETN_price_state
+    node_type: PRICE_STATE
+    label: Eaton current price state
+    as_of: "2026-09-25T20:00:00+00:00"
+    evidence_refs: ["case-input:price-state"]
+    provenance: ["market-data:to-be-frozen-in-shadow-case"]
+
+edges:
+  - edge_id: capex_to_power
+    source_node: hyperscaler_ai_datacenter_capex
+    target_node: datacenter_power_demand
+    edge_type: CAUSES
+    direction: positive
+    magnitude_low:
+    magnitude_high:
+    horizon: "12-36m"
+    confidence: 0.40
+    evidence_refs: ["theme:DataCenter_Infra:thesis"]
+    provenance: ["config/themes/datacenter_infra.yaml"]
+    status: HYPOTHESIZED
+  - edge_id: power_to_electrical
+    source_node: datacenter_power_demand
+    target_node: electrical_distribution_demand
+    edge_type: CAUSES
+    direction: positive
+    magnitude_low:
+    magnitude_high:
+    horizon: "6-24m"
+    confidence: 0.55
+    evidence_refs: ["theme:DataCenter_Infra:economic_chain"]
+    provenance: ["config/themes/datacenter_infra.yaml"]
+    status: HYPOTHESIZED
+  - edge_id: electrical_to_etn
+    source_node: electrical_distribution_demand
+    target_node: ETN_electrical_americas
+    edge_type: EXPOSES
+    direction: positive
+    magnitude_low:
+    magnitude_high:
+    horizon: "0-24m"
+    confidence: 0.75
+    evidence_refs:
+      - "https://www.sec.gov/Archives/edgar/data/1551182/000155118226000027/etn06302026exhibit99.htm"
+    provenance: ["primary:ETN:Q2-2026", "theme-layer:electrical_switchgear"]
+    status: SUPPORTED
+  - edge_id: etn_exposure_to_eps
+    source_node: ETN_electrical_americas
+    target_node: ETN_FY2026_ADJUSTED_EPS
+    edge_type: IMPLIES
+    direction: positive
+    magnitude_low:
+    magnitude_high:
+    horizon: "FY2026"
+    confidence: 0.55
+    evidence_refs:
+      - "https://www.sec.gov/Archives/edgar/data/1551182/000155118226000027/etn06302026exhibit99.htm"
+    provenance: ["primary:ETN:segment-and-guidance"]
+    status: HYPOTHESIZED
+  - edge_id: earnings_reveals_eps
+    source_node: ETN_next_earnings
+    target_node: ETN_FY2026_ADJUSTED_EPS
+    edge_type: REVEALS
+    direction: information
+    magnitude_low:
+    magnitude_high:
+    horizon: "next-quarter"
+    confidence: 0.90
+    evidence_refs: ["company:ETN:quarterly-earnings-process"]
+    provenance: ["primary:ETN:investor-relations"]
+    status: SUPPORTED
+  - edge_id: price_prices_expectation
+    source_node: ETN_price_state
+    target_node: ETN_market_FY2026_ADJUSTED_EPS
+    edge_type: PRICES
+    direction: implied
+    magnitude_low:
+    magnitude_high:
+    horizon: "current"
+    confidence: 0.20
+    evidence_refs: ["case-input:market-expectation-required"]
+    provenance: ["method:to-be-frozen-in-shadow-case"]
+    status: HYPOTHESIZED
