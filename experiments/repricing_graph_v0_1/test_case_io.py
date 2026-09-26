@@ -116,3 +116,17 @@ def test_membership_before_theme_effective_date_is_rejected(tmp_path):
     case = load_shadow_case(_write(tmp_path, payload))
     with pytest.raises(ValueError, match="effective"):
         validate_etn_vertical_slice_case(case, load_theme_package(PACKAGE_PATH))
+
+
+def test_rejects_future_estimate_asof_even_when_source_is_old(tmp_path):
+    payload = _payload()
+    payload["our_expectation"]["as_of"] = "2026-09-27T20:00:00+00:00"
+    with pytest.raises(ValueError, match="estimate as_of"):
+        load_shadow_case(_write(tmp_path, payload))
+
+
+def test_rejects_expectation_evidence_ref_not_in_frozen_source_registry(tmp_path):
+    payload = _payload()
+    payload["our_expectation"]["evidence_refs"] = ["nonexistent-source"]
+    with pytest.raises(ValueError, match="evidence ref"):
+        load_shadow_case(_write(tmp_path, payload))
