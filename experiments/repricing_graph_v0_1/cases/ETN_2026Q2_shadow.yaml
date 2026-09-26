@@ -1,0 +1,132 @@
+version: "0.1"
+case_id: ETN_2026Q2_SHADOW_20260925
+theme_id: DataCenter_Infra
+layer: electrical_switchgear
+ticker: ETN
+as_of: "2026-09-26T03:53:00+00:00"
+horizon: "60d"
+graph_ref: "DataCenter_Infra:ETN:electrical_switchgear:v0.1"
+reality_model_ref: "ETN_2026Q2_guidance_reality:v0.1"
+market_belief_model_ref: "ETN_20260925_consensus:v0.1"
+primary_fundamental_variable: ETN_FY2026_ADJUSTED_EPS
+expectation_gap_ref:
+gap_uncertainty:
+current_tape_ref:
+thesis: >-
+  Electrical Americas demand is strong, but the company's current FY2026 adjusted EPS
+  guidance overlaps the observed sell-side consensus. This shadow case therefore does
+  not yet establish a positive expectation gap.
+strongest_counter_thesis: >-
+  The strong DataCenter/electrical demand evidence is already substantially reflected
+  in both management guidance and analyst expectations.
+invalidation_conditions:
+  - "Electrical Americas order/backlog acceleration materially reverses."
+  - "The causal exposure from electrical demand to ETN earnings is contradicted."
+  - "Market expectations move above the evidence-supported reality range."
+key_unknowns: []
+status: RESEARCHING
+provenance:
+  - "config/themes/datacenter_infra.yaml"
+  - "config/datacenter_seed.example.yaml"
+  - "experiments/repricing_graph_v0_1/cases/ETN_2026Q2_sources.md"
+
+our_expectation:
+  variable_id: ETN_FY2026_ADJUSTED_EPS
+  as_of: "2026-09-26T03:53:00+00:00"
+  available_at: "2026-07-31T23:59:59+00:00"
+  kind: INTERVAL
+  unit: "USD/share"
+  period: FY2026
+  horizon: FY2026
+  point:
+  low: 13.40
+  high: 13.60
+  confidence: 0.55
+  source_id: etn_q2_2026_primary
+  evidence_refs:
+    - "https://www.sec.gov/Archives/edgar/data/1551182/000155118226000027/etn06302026exhibit99.htm"
+  provenance:
+    - "direct:company-guidance"
+  probability_is_calibrated: false
+
+market_expectation:
+  variable_id: ETN_FY2026_ADJUSTED_EPS
+  as_of: "2026-09-26T03:53:00+00:00"
+  available_at: "2026-09-26T03:52:00+00:00"
+  kind: POINT
+  unit: "USD/share"
+  period: FY2026
+  horizon: FY2026
+  point: 13.55
+  low:
+  high:
+  confidence: 0.55
+  source_id: etn_consensus_20260925
+  evidence_refs:
+    - "https://stockanalysis.com/stocks/etn/forecast/"
+  provenance:
+    - "S&P Global Market Intelligence via StockAnalysis"
+    - "retrieved-for-shadow-case:2026-09-26T03:52:00Z"
+  method: SELL_SIDE_CONSENSUS
+  direct_vs_implied: direct
+  staleness_days: 0
+  assumptions: []
+  probability_is_calibrated: false
+
+catalysts:
+  - catalyst_id: ETN_Q3_2026_EARNINGS_ESTIMATE
+    event_type: earnings_guidance_update
+    expected_date_or_window: "2026-11-03 (estimated; not company-confirmed)"
+    available_at: "2026-09-26T03:52:00+00:00"
+    target_node_ids:
+      - ETN_FY2026_ADJUSTED_EPS
+    expected_information: "Q3 performance and updated FY2026 guidance."
+    observability: "public earnings release/call"
+    thesis_relevance: "Can reveal whether electrical demand strength translates into earnings above current expectations."
+    source_ref: "https://www.tipranks.com/stocks/etn/earnings"
+    status: ESTIMATED_NOT_CONFIRMED
+
+catalyst_refs:
+  - ETN_Q3_2026_EARNINGS_ESTIMATE
+upside_scenarios: []
+downside_scenarios: []
+
+sources:
+  - source_id: etn_q2_2026_primary
+    url: "https://www.sec.gov/Archives/edgar/data/1551182/000155118226000027/etn06302026exhibit99.htm"
+    event_time: "2026-07-31"
+    available_at: "2026-07-31T23:59:59+00:00"
+    variable_id: ETN_FY2026_ADJUSTED_EPS
+    value: "13.40-13.60"
+    unit: "USD/share"
+    period: FY2026
+    revision_lineage: "Q2 2026 company guidance; supersedes earlier FY2026 guidance."
+    direct_or_inferred: direct
+    source_kind: management_guidance
+    notes: >-
+      Company also reported Electrical Americas Q2 organic sales +18%, rolling
+      twelve-month orders +41%, and backlog +33% year over year.
+  - source_id: etn_consensus_20260925
+    url: "https://stockanalysis.com/stocks/etn/forecast/"
+    event_time: "2026-09-25"
+    available_at: "2026-09-26T03:52:00+00:00"
+    variable_id: ETN_FY2026_ADJUSTED_EPS
+    value: "13.55 average; 13.25 low; 14.12 high"
+    unit: "USD/share"
+    period: FY2026
+    revision_lineage: "Current forecast snapshot; source page states last updated Sep 25, 2026."
+    direct_or_inferred: direct
+    source_kind: sell_side_consensus
+    notes: "Page identifies S&P Global Market Intelligence and TipRanks as data sources."
+  - source_id: etn_q3_earnings_date_estimate_20260925
+    url: "https://www.tipranks.com/stocks/etn/earnings"
+    event_time: "2026-09-25"
+    available_at: "2026-09-26T03:52:00+00:00"
+    variable_id: ETN_NEXT_EARNINGS_DATE
+    value: "2026-11-03 estimated, TBA/not confirmed"
+    unit: date
+    period: Q3_2026
+    revision_lineage: "Estimated from past reporting schedule; not company-confirmed."
+    direct_or_inferred: inferred
+    source_kind: catalyst_schedule_estimate
+    notes: "Used only as an estimated catalyst window, not as a confirmed company event date."
