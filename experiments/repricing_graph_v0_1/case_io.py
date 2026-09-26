@@ -26,7 +26,7 @@ _FORBIDDEN_FUTURE_FIELDS={
 
 def _dt(value:str)->datetime:
     if not value: raise ValueError("available_at must be present")
-    return datetime.fromisoformat(value.replace("Z","+00:00"))
+    return datetime.fromisoformat(value)
 
 
 def _source_index(payload:dict, as_of:str)->dict[str,dict]:
