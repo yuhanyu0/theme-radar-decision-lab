@@ -143,8 +143,6 @@ class GraphEdge:
         ):
             raise ValueError("invalid edge magnitude range")
         _confidence(self.confidence)
-        _required_refs("evidence_refs", self.evidence_refs)
-        _required_refs("provenance", self.provenance)
 
 
 @dataclass(frozen=True)
@@ -355,6 +353,8 @@ def validate_repricing_graph(graph: RepricingGraph) -> None:
         raise ValueError("duplicate graph edge")
     known = set(node_ids)
     for edge in graph.edges:
+        _required_refs("evidence_refs", edge.evidence_refs)
+        _required_refs("provenance", edge.provenance)
         if edge.source_node not in known or edge.target_node not in known:
             raise ValueError("edge references missing graph node")
         if (
