@@ -56,11 +56,16 @@ def _context(*, causal=True, tape_stage="B3"):
     )
 
 
-def test_real_complete_case_compiles_to_candidate_but_not_trade_instruction():
+def test_real_guidance_baseline_case_stays_researching_and_not_trade_instruction():
     case = load_shadow_case(CASE_PATH)
     gap = calculate_expectation_gap(case.our_expectation, case.market_expectation)
-    decision = compile_shadow_repricing_decision(case=case, gap=gap, context=_context())
-    assert decision.status == "CANDIDATE"
+    decision = compile_shadow_repricing_decision(
+        case=case,
+        gap=gap,
+        context=_context(),
+        graph=load_etn_template(TEMPLATE_PATH),
+    )
+    assert decision.status == "RESEARCHING"
     assert decision.ticker == "ETN"
     assert decision.expectation_gap == gap
     assert "gap interval crosses zero" in decision.warnings
