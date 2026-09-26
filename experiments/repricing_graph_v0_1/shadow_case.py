@@ -95,7 +95,7 @@ def compile_shadow_repricing_decision(
         expectation_gap=gap,
         catalyst=catalyst,
         tape_context=context.tape_assessment,
-        scenarios=tuple((*case.upside_scenarios, *case.downside_scenarios)),
+        scenarios=(*case.upside_scenarios, *case.downside_scenarios),
         strongest_counter_thesis=case.strongest_counter_thesis,
         invalidation_conditions=case.invalidation_conditions,
         key_unknowns=case.key_unknowns,
