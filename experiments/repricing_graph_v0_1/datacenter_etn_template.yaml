@@ -1,0 +1,87 @@
+graph_id: "DataCenter_Infra:ETN:electrical_switchgear:v0.1"
+as_of: "2026-09-25T20:00:00+00:00"
+theme_id: DataCenter_Infra
+target: ETN
+layer: electrical_switchgear
+nodes:
+  - {node_id: hyperscaler_ai_datacenter_capex, node_type: WORLD_STATE, label: "Hyperscaler AI/data-center capex"}
+  - {node_id: datacenter_power_demand, node_type: THEME_LAYER_STATE, label: "Data-center power demand"}
+  - {node_id: electrical_distribution_demand, node_type: THEME_LAYER_STATE, label: "Electrical distribution and switchgear demand"}
+  - {node_id: ETN_electrical_americas, node_type: COMPANY_EXPOSURE, label: "ETN Electrical Americas exposure"}
+  - {node_id: ETN_FY2026_ADJUSTED_EPS, node_type: COMPANY_KPI, label: "ETN FY2026 adjusted EPS"}
+  - {node_id: ETN_market_expected_FY2026_EPS, node_type: MARKET_EXPECTATION, label: "Market expectation for ETN FY2026 adjusted EPS"}
+  - {node_id: ETN_next_earnings, node_type: CATALYST, label: "Next ETN earnings/guidance update"}
+  - {node_id: ETN_price, node_type: PRICE_STATE, label: "ETN share price"}
+edges:
+  - edge_id: capex_to_power
+    source_node: hyperscaler_ai_datacenter_capex
+    target_node: datacenter_power_demand
+    edge_type: CAUSES
+    direction: positive
+    magnitude_or_elasticity_range:
+    horizon: 12m
+    confidence: 0.50
+    evidence_refs: ["theme:datacenter_infra:economic_chain"]
+    provenance: ["config/themes/datacenter_infra.yaml"]
+    evidence_kinds: ["THEME_PRIMARY_SCAFFOLD"]
+    status: HYPOTHESIZED
+  - edge_id: power_to_electrical
+    source_node: datacenter_power_demand
+    target_node: electrical_distribution_demand
+    edge_type: CAUSES
+    direction: positive
+    magnitude_or_elasticity_range:
+    horizon: 12m
+    confidence: 0.50
+    evidence_refs: ["theme:datacenter_infra:economic_chain"]
+    provenance: ["config/themes/datacenter_infra.yaml"]
+    evidence_kinds: ["THEME_PRIMARY_SCAFFOLD"]
+    status: HYPOTHESIZED
+  - edge_id: electrical_to_etn
+    source_node: electrical_distribution_demand
+    target_node: ETN_electrical_americas
+    edge_type: EXPOSES
+    direction: positive
+    magnitude_or_elasticity_range:
+    horizon: 12m
+    confidence: 0.55
+    evidence_refs: ["etn:electrical-americas:primary"]
+    provenance: ["company-primary-required-at-case-freeze"]
+    evidence_kinds: ["COMPANY_PRIMARY"]
+    status: HYPOTHESIZED
+  - edge_id: etn_exposure_to_eps
+    source_node: ETN_electrical_americas
+    target_node: ETN_FY2026_ADJUSTED_EPS
+    edge_type: IMPLIES
+    direction: positive
+    magnitude_or_elasticity_range:
+    horizon: FY2026
+    confidence: 0.45
+    evidence_refs: ["etn:orders-backlog-guidance:primary"]
+    provenance: ["company-primary-required-at-case-freeze"]
+    evidence_kinds: ["COMPANY_PRIMARY"]
+    status: HYPOTHESIZED
+  - edge_id: earnings_reveals_eps
+    source_node: ETN_next_earnings
+    target_node: ETN_FY2026_ADJUSTED_EPS
+    edge_type: REVEALS
+    direction: reveals
+    magnitude_or_elasticity_range:
+    horizon: next_event
+    confidence: 0.80
+    evidence_refs: ["etn:earnings-calendar:primary"]
+    provenance: ["company-calendar-required-at-case-freeze"]
+    evidence_kinds: ["COMPANY_PRIMARY"]
+    status: HYPOTHESIZED
+  - edge_id: price_prices_market_eps
+    source_node: ETN_price
+    target_node: ETN_market_expected_FY2026_EPS
+    edge_type: PRICES
+    direction: implied
+    magnitude_or_elasticity_range:
+    horizon: FY2026
+    confidence: 0.40
+    evidence_refs: ["market-expectation-method-required-at-case-freeze"]
+    provenance: ["case-specific-market-expectation"]
+    evidence_kinds: ["MARKET_DATA_OR_CONSENSUS"]
+    status: HYPOTHESIZED
