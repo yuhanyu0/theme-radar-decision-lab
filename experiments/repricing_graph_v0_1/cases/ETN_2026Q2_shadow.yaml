@@ -1,0 +1,106 @@
+case:
+  case_id: "ETN_2026Q2_SHADOW_2026-09-25"
+  theme_id: DataCenter_Infra
+  ticker: ETN
+  as_of: "2026-09-25T20:00:00+00:00"
+  horizon: "20d/60d"
+  graph_ref: "DataCenter_Infra:ETN:electrical_switchgear:v0.1"
+  reality_model_ref: "etn_q2_2026_guidance_and_demand"
+  market_belief_model_ref: "fy2026_sell_side_consensus_2026-09-25"
+  primary_fundamental_variable: ETN_FY2026_ADJUSTED_EPS
+  thesis: "Electrical Americas demand remains strong, but the currently observable FY2026 EPS range does not establish a positive gap versus public sell-side consensus."
+  strongest_counter_thesis: "The market consensus already sits near the top of management's current FY2026 adjusted EPS guidance, so the causal theme may already be substantially reflected in FY2026 expectations."
+  invalidation_conditions:
+    - "Electrical Americas orders/backlog materially decelerate"
+    - "FY2026 adjusted EPS guidance is reduced"
+  status: RESEARCHING
+
+sources:
+  - source_id: etn_q2_release
+    url: "https://www.eaton.com/us/en-us/company/news-insights/news-releases/2026/eaton-reports-record-second-quarter-2026-results.html"
+    event_time: "2026-07-31T11:00:00+00:00"
+    available_at: "2026-07-31T11:00:00+00:00"
+    variable_id: ETN_Q2_2026_DEMAND_AND_GUIDANCE
+    value: "Electrical Americas orders +41% organic rolling 12m; backlog +33% YoY; FY2026 adjusted EPS guidance $13.40-$13.60"
+    unit: mixed
+    period: FY2026
+    revision_lineage: "supersedes Q1 2026 FY adjusted EPS guidance $13.05-$13.50"
+    direct_or_inferred: direct
+    source_role: company_guidance
+    notes: "Primary company release; also reports data centers remain a key growth driver."
+
+  - source_id: fy2026_consensus_sep25
+    url: "https://www.americanbankingnews.com/2026/09/25/eaton-stock-sees-q4-earnings-forecast-cut-at-zacks-research.html"
+    event_time: "2026-09-25T12:00:00+00:00"
+    available_at: "2026-09-25T12:00:00+00:00"
+    variable_id: ETN_FY2026_ADJUSTED_EPS
+    value: 13.56
+    unit: USD/share
+    period: FY2026
+    revision_lineage: "reported current full-year consensus"
+    direct_or_inferred: reported_consensus
+    source_role: sell_side_consensus
+    notes: "Secondary report of consensus; used as point-in-time market-belief input, not as primary company evidence."
+
+  - source_id: etn_next_earnings_window_sep25
+    url: "https://marketchameleon.com/Overview/ETN/Earnings/Earnings-Dates/"
+    event_time: "2026-09-25T16:00:00+00:00"
+    available_at: "2026-09-25T16:00:00+00:00"
+    variable_id: ETN_NEXT_EARNINGS_WINDOW
+    value: "2026-10-30/2026-11-04"
+    unit: date_window
+    period: Q3_2026
+    revision_lineage: "estimated from historical reporting pattern; company date not yet announced"
+    direct_or_inferred: inferred
+    source_role: catalyst_estimate
+    notes: "Explicitly estimated, not company-confirmed."
+
+our_expectation:
+  variable_id: ETN_FY2026_ADJUSTED_EPS
+  as_of: "2026-09-25T20:00:00+00:00"
+  available_at: "2026-07-31T11:00:00+00:00"
+  kind: INTERVAL
+  value:
+  low: 13.40
+  high: 13.60
+  unit: USD/share
+  period: FY2026
+  horizon: FY2026
+  confidence: 0.70
+  evidence_refs: [etn_q2_release]
+  probability_is_calibrated: false
+
+market_expectation:
+  variable_id: ETN_FY2026_ADJUSTED_EPS
+  as_of: "2026-09-25T20:00:00+00:00"
+  available_at: "2026-09-25T12:00:00+00:00"
+  kind: POINT
+  value: 13.56
+  low:
+  high:
+  unit: USD/share
+  period: FY2026
+  horizon: FY2026
+  confidence: 0.65
+  evidence_refs: [fy2026_consensus_sep25]
+  probability_is_calibrated: false
+  method: SELL_SIDE_CONSENSUS
+  inference_method: "reported consensus estimate"
+  direct_vs_implied: direct
+  staleness_days: 0.0
+  source_id: fy2026_consensus_sep25
+  valuation_assumptions: {}
+
+catalysts:
+  - catalyst_id: etn_q3_2026_earnings_window
+    event_type: earnings_and_guidance_update
+    expected_date_or_window: "2026-10-30/2026-11-04"
+    known_at: "2026-09-25T16:00:00+00:00"
+    target_node_ids: [ETN_FY2026_ADJUSTED_EPS]
+    expected_information: "Q3 adjusted EPS, updated FY2026 guidance, Electrical Americas order/backlog commentary"
+    observability: high
+    thesis_relevance: high
+    source_ref: etn_next_earnings_window_sep25
+    status: ESTIMATED_NOT_COMPANY_CONFIRMED
+
+scenarios: []
