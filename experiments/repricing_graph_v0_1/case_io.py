@@ -13,6 +13,7 @@ from .model import (
     MarketExpectation,
     MarketExpectationMethod,
     RealityEstimate,
+    RealityEstimateMethod,
     RepricingCase,
     ScenarioReturn,
     validate_repricing_case,
@@ -64,6 +65,9 @@ def _estimate(payload: dict[str, Any]) -> RealityEstimate:
         confidence=float(payload["confidence"]),
         evidence_refs=tuple(str(x) for x in payload["evidence_refs"]),
         probability_is_calibrated=bool(payload["probability_is_calibrated"]),
+        derivation_method=RealityEstimateMethod(
+            str(payload.get("derivation_method", "UNSPECIFIED"))
+        ),
     )
 
 
