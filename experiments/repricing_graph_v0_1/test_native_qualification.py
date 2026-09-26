@@ -145,6 +145,7 @@ def test_supported_label_with_unbound_causal_source_does_not_promote():
 
 def test_frozen_input_payload_and_decision_are_self_consistent():
     import json
+
     from decision_lab.ledger import canonical_hash
     c = load_shadow_case(CASE)
     d = compile_shadow_repricing_decision(case=c, gap=None, context=_context())
@@ -169,8 +170,8 @@ def test_catalyst_cannot_be_known_before_its_source(tmp_path):
 
 
 def test_calibrated_marginals_do_not_calibrate_interval_difference():
-    from experiments.repricing_graph_v0_1.test_gap import _market
     from experiments.repricing_graph_v0_1.model import EstimateKind
+    from experiments.repricing_graph_v0_1.test_gap import _market
     a = _ours(kind=EstimateKind.INTERVAL, value=None, low=10, high=12,
               probability_is_calibrated=True)
     b = _market(probability_is_calibrated=True)
@@ -179,6 +180,7 @@ def test_calibrated_marginals_do_not_calibrate_interval_difference():
 
 def test_native_numpy_boolean_survives_exact_json_boundary():
     import json
+
     import numpy as np
     c = load_shadow_case(CASE)
     ctx = _context()

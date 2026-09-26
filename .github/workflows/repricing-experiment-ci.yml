@@ -10,6 +10,9 @@ permissions:
 jobs:
   qualify:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +30,14 @@ jobs:
           git rev-parse HEAD | tee validation/HEAD.txt
           git diff --exit-code c5866ad8f09a472cf631a764f911547c05d337d9 -- src tests schemas pyproject.toml
           pip freeze > validation/environment.txt
+      - name: Verify logging cannot hide failures
+        run: |
+          set +e
+          bash --noprofile --norc -eo pipefail -c 'exit 13 | tee validation/intentional-failure.log'
+          code=$?
+          set -e
+          test "$code" -eq 13
+          echo "Failure propagation: PASS (expected exit 13 observed)" > validation/failure-propagation.log
       - name: Original regression
         run: pytest -q | tee validation/original-tests.log
       - name: Experimental regression

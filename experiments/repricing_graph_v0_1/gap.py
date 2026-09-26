@@ -96,9 +96,11 @@ def summarize_scenarios(
     if total <= 0.0:
         raise ValueError("scenario weights must sum to a positive value")
 
-    if any(item.probability_is_calibrated for item in scenarios):
-        if not all(item.probability_is_calibrated for item in scenarios) or not isclose(total, 1.0):
-            raise ValueError("calibrated scenario probabilities must sum to one")
+    if any(item.probability_is_calibrated for item in scenarios) and (
+        not all(item.probability_is_calibrated for item in scenarios)
+        or not isclose(total, 1.0)
+    ):
+        raise ValueError("calibrated scenario probabilities must sum to one")
     expected = sum(
         float(item.weight) * item.expected_return
         for item in scenarios
