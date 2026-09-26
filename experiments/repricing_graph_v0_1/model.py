@@ -180,7 +180,7 @@ class RepricingCase:
 
 
 def _parse_dt(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.fromisoformat(value)
 
 
 def _validate_estimate_common(estimate: RealityEstimate | MarketExpectation) -> None:
