@@ -1,8 +1,9 @@
-from dataclasses import replace
 import numpy as np
 import pandas as pd
 import pytest
 
+from decision_lab.linkage import LinkageResult
+from decision_lab.tape import TapeAssessment
 from experiments.repricing_graph_v0_1.case_io import load_shadow_case
 from experiments.repricing_graph_v0_1.context import RepricingContext
 from experiments.repricing_graph_v0_1.evaluate import (
@@ -12,8 +13,6 @@ from experiments.repricing_graph_v0_1.evaluate import (
 )
 from experiments.repricing_graph_v0_1.gap import calculate_expectation_gap
 from experiments.repricing_graph_v0_1.shadow_case import compile_shadow_repricing_decision
-from decision_lab.linkage import LinkageResult
-from decision_lab.tape import TapeAssessment
 
 CASE="experiments/repricing_graph_v0_1/cases/ETN_2026Q2_shadow.yaml"
 

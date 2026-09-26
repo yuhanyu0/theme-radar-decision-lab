@@ -1,10 +1,9 @@
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
 
-from experiments.repricing_graph_v0_1.model import EdgeType, NodeType, validate_repricing_graph
+from experiments.repricing_graph_v0_1.model import EdgeType, NodeType
 from experiments.repricing_graph_v0_1.template import load_etn_template
 
 TEMPLATE=Path(__file__).with_name("datacenter_etn_template.yaml")

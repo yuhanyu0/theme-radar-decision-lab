@@ -1,12 +1,21 @@
 from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
+
 import yaml
 
 from decision_lab.themes import ThemePackage
+
 from .model import (
-    CatalystRecord, EstimateKind, MarketExpectation, MarketExpectationMethod,
-    RealityEstimate, RepricingCase, ScenarioReturn, validate_repricing_case,
+    CatalystRecord,
+    EstimateKind,
+    MarketExpectation,
+    MarketExpectationMethod,
+    RealityEstimate,
+    RepricingCase,
+    ScenarioReturn,
+    validate_repricing_case,
 )
 
 _FORBIDDEN_FUTURE_FIELDS={

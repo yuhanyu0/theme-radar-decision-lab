@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, is_dataclass
 from enum import Enum
-import json
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +12,6 @@ from .case_io import load_shadow_case
 from .context import build_repricing_context
 from .gap import calculate_expectation_gap
 from .shadow_case import compile_shadow_repricing_decision
-
 
 ROOT = Path(__file__).resolve().parent
 CASES = ROOT / "cases"

@@ -1,5 +1,5 @@
 from dataclasses import replace
-import math
+
 import pytest
 
 from experiments.repricing_graph_v0_1.gap import (

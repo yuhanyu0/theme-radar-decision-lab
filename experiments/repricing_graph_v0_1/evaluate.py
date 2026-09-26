@@ -6,6 +6,7 @@ from enum import Enum
 import pandas as pd
 
 from decision_lab.outcomes import evaluate_forward_outcomes
+
 from .shadow_case import ShadowRepricingDecision
 
 
