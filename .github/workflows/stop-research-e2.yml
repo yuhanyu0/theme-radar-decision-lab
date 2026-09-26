@@ -1,0 +1,57 @@
+name: Stop Research E2 Native Crossover
+on:
+  push:
+    branches: [experiment/stop-research-e2-v0-1]
+permissions:
+  contents: read
+jobs:
+  native-e2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install repository dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Verify production and frozen E1 unchanged
+        run: |
+          git diff --exit-code c5866ad8f09a472cf631a764f911547c05d337d9 -- src tests schemas pyproject.toml
+          git diff --exit-code a3917774344b7906cef92d0720c856ad3af0f410 -- experiments/stop_e1
+      - name: Full original regression
+        run: python -m pytest -q
+      - name: Frozen E1 instrument regression
+        run: python -m pytest -q experiments/stop_e1/test_e1.py
+      - name: E2 instrument contract
+        run: python -m pytest -q experiments/stop_e2/test_e2.py
+      - name: E2 frozen evaluation
+        run: python experiments/stop_e2/run_e2.py
+      - name: Deterministic full native rerun
+        run: python experiments/stop_e2/run_e2.py --verify-repeat
+      - name: Compact result summary
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for name in ('summary.json', 'verification.json'):
+              p = Path('experiments/stop_e2/results') / name
+              if p.exists():
+                  print('BEGIN_E2_' + name)
+                  print(p.read_text())
+                  print('END_E2_' + name)
+          PY
+      - name: Preserve exact repository for offline reproduction
+        if: success()
+        run: |
+          git bundle create experiments/stop_e2/repository.bundle HEAD refs/remotes/origin/main
+          python -m pip freeze > experiments/stop_e2/CI_REQUIREMENTS.txt
+          git rev-parse HEAD > experiments/stop_e2/EXECUTION_COMMIT.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stop-research-e2-native-results
+          path: experiments/stop_e2
+          retention-days: 90
