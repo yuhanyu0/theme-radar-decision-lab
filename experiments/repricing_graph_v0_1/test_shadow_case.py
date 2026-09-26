@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+
+import yaml
 
 import pytest
 
@@ -150,3 +153,80 @@ def test_compiler_rejects_case_bound_to_different_graph():
             context=_context(),
             graph=graph,
         )
+
+
+def test_catalyst_content_is_frozen_into_decision_hash_and_preserved(tmp_path):
+    raw = yaml.safe_load(CASE_PATH.read_text())
+    first_path = tmp_path / "first.yaml"
+    first_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    first_case = load_shadow_case(first_path)
+
+    raw["catalysts"][0]["expected_date_or_window"] = "2026-11-10"
+    second_path = tmp_path / "second.yaml"
+    second_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    second_case = load_shadow_case(second_path)
+
+    graph = load_etn_template(TEMPLATE_PATH)
+    first_gap = calculate_expectation_gap(
+        first_case.our_expectation, first_case.market_expectation
+    )
+    second_gap = calculate_expectation_gap(
+        second_case.our_expectation, second_case.market_expectation
+    )
+    first = compile_shadow_repricing_decision(
+        case=first_case, gap=first_gap, context=_context(), graph=graph
+    )
+    second = compile_shadow_repricing_decision(
+        case=second_case, gap=second_gap, context=_context(), graph=graph
+    )
+    assert first.case_hash != second.case_hash
+    assert first.catalysts[0].expected_date_or_window != second.catalysts[0].expected_date_or_window
+
+
+def test_source_content_change_changes_frozen_case_hash(tmp_path):
+    raw = yaml.safe_load(CASE_PATH.read_text())
+    first_path = tmp_path / "first.yaml"
+    first_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    first_case = load_shadow_case(first_path)
+
+    raw["sources"][0]["url"] = "https://example.com/different-source-version"
+    second_path = tmp_path / "second.yaml"
+    second_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    second_case = load_shadow_case(second_path)
+
+    graph = load_etn_template(TEMPLATE_PATH)
+    first = compile_shadow_repricing_decision(
+        case=first_case,
+        gap=calculate_expectation_gap(
+            first_case.our_expectation, first_case.market_expectation
+        ),
+        context=_context(),
+        graph=graph,
+    )
+    second = compile_shadow_repricing_decision(
+        case=second_case,
+        gap=calculate_expectation_gap(
+            second_case.our_expectation, second_case.market_expectation
+        ),
+        context=_context(),
+        graph=graph,
+    )
+    assert first.case_hash != second.case_hash
+
+
+def test_transmission_derived_estimate_still_requires_supported_causal_path():
+    case = load_shadow_case(CASE_PATH)
+    derived = replace(
+        case.our_expectation,
+        derivation_method=type(case.our_expectation.derivation_method).CAUSAL_TRANSMISSION,
+    )
+    case = replace(case, our_expectation=derived)
+    gap = calculate_expectation_gap(case.our_expectation, case.market_expectation)
+    decision = compile_shadow_repricing_decision(
+        case=case,
+        gap=gap,
+        context=_context(),
+        graph=load_etn_template(TEMPLATE_PATH),
+    )
+    assert decision.status == "RESEARCHING"
+    assert "supported causal transmission path missing" in decision.warnings
