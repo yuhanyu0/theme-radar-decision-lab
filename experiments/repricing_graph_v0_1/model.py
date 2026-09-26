@@ -43,7 +43,7 @@ class MarketExpectationMethod(str, Enum):
 
 
 def _parse_time(value: str) -> datetime:
-    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
         raise ValueError("timestamps must be timezone-aware")
     return dt
@@ -109,9 +109,16 @@ class RealityEstimate:
         if self.kind is EstimateKind.POINT:
             if self.value is None or self.low is not None or self.high is not None:
                 raise ValueError("point estimate requires value only")
-        elif self.kind is EstimateKind.INTERVAL:
-            if self.value is not None or self.low is None or self.high is None or self.low > self.high:
-                raise ValueError("interval estimate requires ordered low/high")
+        elif (
+            self.kind is EstimateKind.INTERVAL
+            and (
+                self.value is not None
+                or self.low is None
+                or self.high is None
+                or self.low > self.high
+            )
+        ):
+            raise ValueError("interval estimate requires ordered low/high")
         if not 0.0 <= float(self.confidence) <= 1.0:
             raise ValueError("confidence must be in [0,1]")
         _nonempty(self.evidence_refs, "evidence_refs")
