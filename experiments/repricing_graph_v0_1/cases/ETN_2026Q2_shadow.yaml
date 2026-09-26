@@ -69,6 +69,7 @@ our_expectation:
   confidence: 0.70
   evidence_refs: [etn_q2_release]
   probability_is_calibrated: false
+  derivation_method: COMPANY_GUIDANCE
 
 market_expectation:
   variable_id: ETN_FY2026_ADJUSTED_EPS
