@@ -160,21 +160,33 @@ def native_trace(request, retain=False):
             bh = hashlib.sha256(body.encode()).hexdigest()
             if eligible(query, body) and bh not in seen_bodies:
                 one = read_facts(query, [body])
-                payload = {'body': body, 'source_family': family}
-                if one['verdict'] in RESOLVED:
-                    payload['net_debt_to_ebitda'] = ratio(one)
                 pub = next(line.split(':', 1)[1].strip() for line in body.splitlines()
                            if line.startswith('Published:'))
-                evidence = EvidenceRecord(
-                    evidence_id='synthetic:' + bh, observed_at=pub, retrieved_at=at(step),
+                raw = EvidenceRecord(
+                    evidence_id='synthetic:raw:' + bh, observed_at=pub, retrieved_at=at(step),
                     market_asof=query['as_of'], ticker='AAA', theme=order.theme_id,
-                    source_type='sec_filing', source_ref=f'synthetic:{family}:{bh}',
-                    fact_type='synthetic_disclosure_with_derived_ratio', payload=payload,
-                    is_observed_fact=False).with_hash()
+                    source_type='sec_filing', source_ref=f'synthetic:raw:{family}:{bh}',
+                    fact_type='synthetic_disclosed_statement',
+                    payload={'body': body, 'source_family': family},
+                    is_observed_fact=True).with_hash()
                 inputs.append(ResearchEvidenceInput(
-                    evidence=evidence, independent=family not in families,
+                    evidence=raw, independent=family not in families,
                     direction=ResearchEvidenceDirection.SUPPORTING,
                     dimensions=('balance_sheet_strength',), target_ticker='AAA'))
+                if one['verdict'] in RESOLVED:
+                    derived = EvidenceRecord(
+                        evidence_id='synthetic:derived:' + bh, observed_at=at(step),
+                        retrieved_at=at(step), market_asof=query['as_of'], ticker='AAA',
+                        theme=order.theme_id, source_type='derived_feature',
+                        source_ref=f'synthetic:calculation:{family}:{bh}',
+                        fact_type='derived_ratio_from_disclosed_statement',
+                        payload={'net_debt_to_ebitda': ratio(one),
+                                 'derived_from_source_hash': raw.source_hash},
+                        is_observed_fact=False).with_hash()
+                    inputs.append(ResearchEvidenceInput(
+                        evidence=derived, independent=False,
+                        direction=ResearchEvidenceDirection.SUPPORTING,
+                        dimensions=('balance_sheet_strength',), target_ticker='AAA'))
                 families.add(family)
                 seen_bodies.add(bh)
         readout = read_facts(query, [o['body'] for o in offers[:step]])
