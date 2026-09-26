@@ -42,6 +42,13 @@ class MarketExpectationMethod(str, Enum):
     PRICE_IMPLIED = "PRICE_IMPLIED"
 
 
+class RealityEstimateMethod(str, Enum):
+    UNSPECIFIED = "UNSPECIFIED"
+    DIRECT_OBSERVATION = "DIRECT_OBSERVATION"
+    COMPANY_GUIDANCE = "COMPANY_GUIDANCE"
+    CAUSAL_TRANSMISSION = "CAUSAL_TRANSMISSION"
+
+
 def _parse_time(value: str) -> datetime:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
@@ -102,6 +109,7 @@ class RealityEstimate:
     confidence: float
     evidence_refs: tuple[str, ...]
     probability_is_calibrated: bool
+    derivation_method: RealityEstimateMethod = RealityEstimateMethod.UNSPECIFIED
 
     def __post_init__(self) -> None:
         if _parse_time(self.available_at) > _parse_time(self.as_of):
