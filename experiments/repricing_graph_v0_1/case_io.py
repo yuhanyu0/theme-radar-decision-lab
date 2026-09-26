@@ -76,12 +76,16 @@ def _market(payload: dict[str, Any], sources: dict[str, dict[str, Any]]) -> Mark
     source = sources.get(source_id)
     if source is None:
         raise ValueError("market expectation source is missing")
-    if method is MarketExpectationMethod.SELL_SIDE_CONSENSUS:
-        if source.get("source_role") != "sell_side_consensus":
-            raise ValueError("sell-side consensus cannot be sourced from management guidance")
-    if method is MarketExpectationMethod.PRICE_IMPLIED:
-        if not payload.get("valuation_assumptions"):
-            raise ValueError("price-implied expectation requires frozen valuation assumptions")
+    if (
+        method is MarketExpectationMethod.SELL_SIDE_CONSENSUS
+        and source.get("source_role") != "sell_side_consensus"
+    ):
+        raise ValueError("sell-side consensus cannot be sourced from management guidance")
+    if (
+        method is MarketExpectationMethod.PRICE_IMPLIED
+        and not payload.get("valuation_assumptions")
+    ):
+        raise ValueError("price-implied expectation requires frozen valuation assumptions")
     return MarketExpectation(
         variable_id=str(payload["variable_id"]),
         as_of=str(payload["as_of"]),
