@@ -29,19 +29,19 @@ def _node(node_id, node_type):
 
 
 def _edge(**overrides):
-    base = dict(
-        edge_id="e1",
-        source_node="world",
-        target_node="layer",
-        edge_type=EdgeType.CAUSES,
-        direction="POSITIVE",
-        magnitude_range=None,
-        horizon="12m",
-        confidence=0.7,
-        evidence_refs=("primary:1",),
-        provenance=("company_ir",),
-        status=EdgeStatus.SUPPORTED,
-    )
+    base = {
+        "edge_id": "e1",
+        "source_node": "world",
+        "target_node": "layer",
+        "edge_type": EdgeType.CAUSES,
+        "direction": "POSITIVE",
+        "magnitude_range": None,
+        "horizon": "12m",
+        "confidence": 0.7,
+        "evidence_refs": ("primary:1",),
+        "provenance": ("company_ir",),
+        "status": EdgeStatus.SUPPORTED,
+    }
     base.update(overrides)
     return GraphEdge(**base)
 
