@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pytest
 
 from experiments.repricing_graph_v0_1.model import (
@@ -23,45 +21,45 @@ from experiments.repricing_graph_v0_1.model import (
 
 
 def _estimate(**overrides):
-    payload = dict(
-        variable_id="ETN_FY2026_ADJUSTED_EPS",
-        as_of="2026-09-25T20:00:00+00:00",
-        available_at="2026-09-25T19:00:00+00:00",
-        kind=EstimateKind.POINT,
-        value=13.75,
-        low=None,
-        high=None,
-        unit="USD/share",
-        period="FY2026",
-        horizon="FY2026",
-        confidence=0.7,
-        evidence_refs=("etn-guidance",),
-        probability_is_calibrated=False,
-    )
+    payload = {
+        "variable_id": "ETN_FY2026_ADJUSTED_EPS",
+        "as_of": "2026-09-25T20:00:00+00:00",
+        "available_at": "2026-09-25T19:00:00+00:00",
+        "kind": EstimateKind.POINT,
+        "value": 13.75,
+        "low": None,
+        "high": None,
+        "unit": "USD/share",
+        "period": "FY2026",
+        "horizon": "FY2026",
+        "confidence": 0.7,
+        "evidence_refs": ("etn-guidance",),
+        "probability_is_calibrated": False,
+    }
     payload.update(overrides)
     return RealityEstimate(**payload)
 
 
 def _market(**overrides):
-    payload = dict(
-        variable_id="ETN_FY2026_ADJUSTED_EPS",
-        as_of="2026-09-25T20:00:00+00:00",
-        available_at="2026-09-25T18:00:00+00:00",
-        kind=EstimateKind.POINT,
-        value=13.50,
-        low=None,
-        high=None,
-        unit="USD/share",
-        period="FY2026",
-        horizon="FY2026",
-        confidence=0.8,
-        evidence_refs=("market-exp",),
-        probability_is_calibrated=False,
-        method=MarketExpectationMethod.COMPANY_GUIDANCE,
-        inference_method="direct guidance",
-        direct_vs_implied="direct",
-        staleness_days=0.0,
-    )
+    payload = {
+        "variable_id": "ETN_FY2026_ADJUSTED_EPS",
+        "as_of": "2026-09-25T20:00:00+00:00",
+        "available_at": "2026-09-25T18:00:00+00:00",
+        "kind": EstimateKind.POINT,
+        "value": 13.50,
+        "low": None,
+        "high": None,
+        "unit": "USD/share",
+        "period": "FY2026",
+        "horizon": "FY2026",
+        "confidence": 0.8,
+        "evidence_refs": ("market-exp",),
+        "probability_is_calibrated": False,
+        "method": MarketExpectationMethod.COMPANY_GUIDANCE,
+        "inference_method": "direct guidance",
+        "direct_vs_implied": "direct",
+        "staleness_days": 0.0,
+    }
     payload.update(overrides)
     return MarketExpectation(**payload)
 
