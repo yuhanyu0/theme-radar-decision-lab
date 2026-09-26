@@ -1,0 +1,114 @@
+{
+  "as_of": "2026-09-25T23:30:00+00:00",
+  "case_hash": "3e8d8762ca36c025fcffcc35f972276f8910de60b6f059776a4005c03b42e471",
+  "catalyst": {
+    "catalyst_id": "ETN_Q3_2026_EARNINGS_WINDOW",
+    "event_type": "EARNINGS_GUIDANCE_UPDATE",
+    "expected_date_or_window": "2026-10-26/2026-11-06",
+    "expected_information": "Q3 adjusted EPS, Electrical Americas orders/backlog, and FY2026 guidance update",
+    "known_at": "2026-09-25T22:30:00+00:00",
+    "observability": "HIGH",
+    "source_ref": "marketbeat_next_earnings_estimate_20260925",
+    "status": "ESTIMATED_WINDOW",
+    "target_node_ids": [
+      "ETN_FY2026_ADJUSTED_EPS"
+    ],
+    "thesis_relevance": "HIGH"
+  },
+  "expectation_gap": {
+    "horizon": "FY2026",
+    "kind": "INTERVAL",
+    "lower": -0.1399999999999988,
+    "period": "FY2026",
+    "point": null,
+    "probability_is_calibrated": false,
+    "unit": "USD/share",
+    "upper": 0.0600000000000005,
+    "variable_id": "ETN_FY2026_ADJUSTED_EPS"
+  },
+  "invalidation_conditions": [
+    "Electrical Americas rolling orders materially decelerate",
+    "Backlog growth reverses"
+  ],
+  "key_unknowns": [],
+  "market_data_provenance": {
+    "feed": "IEX",
+    "first_session": "2026-06-15",
+    "last_session": "2026-09-25",
+    "note": "Frozen observed daily bars. Not a forward outcome dataset.",
+    "provider": "Alpaca Market Data",
+    "retrieval_scope": "2026-06-15 through 2026-09-25",
+    "symbols": [
+      "ETN",
+      "NVT",
+      "POWL",
+      "SPY"
+    ],
+    "timeframe": "1Day"
+  },
+  "scenarios": [
+    {
+      "condition": "Orders/backlog remain strong and guidance rises above current consensus",
+      "evidence_refs": [
+        "eaton_q2_2026_guidance"
+      ],
+      "expected_return": 0.1,
+      "horizon_days": 60,
+      "name": "BULL",
+      "probability_is_calibrated": false,
+      "weight": null
+    },
+    {
+      "condition": "Demand decelerates or the market has fully priced current strength",
+      "evidence_refs": [
+        "eaton_q2_2026_guidance"
+      ],
+      "expected_return": -0.12,
+      "horizon_days": 60,
+      "name": "BEAR",
+      "probability_is_calibrated": false,
+      "weight": null
+    }
+  ],
+  "status": "RESEARCHING",
+  "strongest_counter_thesis": "The demand signal is already embedded in FY2026 guidance and consensus, leaving no incremental repricing gap.",
+  "tape_context": {
+    "higher_low": true,
+    "invalidation": 381.30339285714285,
+    "new_low_recently": false,
+    "pivot": 443.58,
+    "reasons": [
+      "latest swing low is above prior swing low",
+      "realized volatility is contracting",
+      "20-session relative strength exceeds benchmark"
+    ],
+    "reclaim": 442.56,
+    "relative_strength_positive": true,
+    "stage": "B2",
+    "state": "higher_low",
+    "support": 388.59,
+    "volatility_contraction": true,
+    "volume_confirmation": false
+  },
+  "target_excluded_linkage": {
+    "beta": 0.7476778440774099,
+    "beta_stability": 0.9885578507335836,
+    "circularity_warning": false,
+    "control_name": "DataCenter_Infra_minus_ETN",
+    "correlation": 0.8713733408458565,
+    "decoupling_score": 0.17530010075987307,
+    "observations": 63,
+    "r2": 0.7592914991368691,
+    "residual_mean": -2.4299896310310034e-18,
+    "residual_vol": 0.014225053261894284,
+    "ticker": "ETN",
+    "window": 63
+  },
+  "theme_id": "DataCenter_Infra",
+  "ticker": "ETN",
+  "warnings": [
+    "statistical linkage is diagnostic, not causal exposure",
+    "market observation unavailable",
+    "expectation gap is not unambiguously positive"
+  ]
+}

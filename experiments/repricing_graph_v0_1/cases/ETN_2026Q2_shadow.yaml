@@ -1,0 +1,125 @@
+case:
+  case_id: ETN_2026Q2_SHADOW_20260925
+  theme_id: DataCenter_Infra
+  ticker: ETN
+  layer: electrical_switchgear
+  as_of: "2026-09-25T23:30:00+00:00"
+  horizon: 60d
+  graph_ref: DataCenter_Infra_ETN_electrical_v0_1
+  reality_model_ref: etn_management_guidance_prior_v1
+  market_belief_model_ref: zacks_consensus_20260922
+  primary_fundamental_variable: ETN_FY2026_ADJUSTED_EPS
+  gap_uncertainty: UNCALIBRATED
+  thesis: "Electrical Americas demand remains strong, but the current public EPS expectation already sits near management guidance; no positive gap is presumed."
+  strongest_counter_thesis: "The demand signal is already embedded in FY2026 guidance and consensus, leaving no incremental repricing gap."
+  invalidation_conditions:
+    - "Electrical Americas rolling orders materially decelerate"
+    - "Backlog growth reverses"
+  status: RESEARCHING
+  provenance:
+    - manual_shadow_case_v0_1
+
+our_expectation:
+  source_ref: eaton_q2_2026_guidance
+  variable_id: ETN_FY2026_ADJUSTED_EPS
+  kind: INTERVAL
+  lower: 13.40
+  upper: 13.60
+  unit: USD/share
+  period: FY2026
+  horizon: FY2026
+  confidence: 0.90
+  probability_is_calibrated: false
+
+market_expectation:
+  source_ref: zacks_consensus_20260922
+  variable_id: ETN_FY2026_ADJUSTED_EPS
+  method: SELL_SIDE_CONSENSUS
+  kind: POINT
+  point: 13.54
+  unit: USD/share
+  period: FY2026
+  horizon: FY2026
+  confidence: 0.70
+  direct_vs_implied: DIRECT
+  staleness_days: 3.0
+  probability_is_calibrated: false
+  valuation_assumptions: []
+
+catalyst:
+  catalyst_id: ETN_Q3_2026_EARNINGS_WINDOW
+  event_type: EARNINGS_GUIDANCE_UPDATE
+  expected_date_or_window: "2026-10-26/2026-11-06"
+  known_at: "2026-09-25T22:30:00+00:00"
+  target_node_ids: [ETN_FY2026_ADJUSTED_EPS]
+  expected_information: "Q3 adjusted EPS, Electrical Americas orders/backlog, and FY2026 guidance update"
+  observability: HIGH
+  thesis_relevance: HIGH
+  source_ref: marketbeat_next_earnings_estimate_20260925
+  status: ESTIMATED_WINDOW
+
+scenarios:
+  upside:
+    - name: BULL
+      expected_return: 0.10
+      horizon_days: 60
+      condition: "Orders/backlog remain strong and guidance rises above current consensus"
+      evidence_refs: [eaton_q2_2026_guidance]
+      weight: null
+  downside:
+    - name: BEAR
+      expected_return: -0.12
+      horizon_days: 60
+      condition: "Demand decelerates or the market has fully priced current strength"
+      evidence_refs: [eaton_q2_2026_guidance]
+      weight: null
+
+sources:
+  - source_id: eaton_q2_2026_guidance
+    url: https://www.eaton.com/us/en-us/company/news-insights/news-releases/2026/eaton-reports-record-second-quarter-2026-results.html
+    source_role: COMPANY_GUIDANCE
+    event_time: "2026-07-31T11:00:00+00:00"
+    available_at: "2026-07-31T11:00:00+00:00"
+    variable_id: ETN_FY2026_ADJUSTED_EPS
+    value: "13.40-13.60"
+    unit: USD/share
+    period: FY2026
+    revision_lineage: "Q1 2026 guidance 13.05-13.50 -> Q2 2026 guidance 13.40-13.60"
+    direct_or_inferred: DIRECT
+    notes: "Company guidance; not sell-side consensus. Q2 release also reports Electrical Americas rolling orders +41% and backlog +33%."
+  - source_id: zacks_consensus_20260922
+    url: https://finance.yahoo.com/markets/stocks/articles/eaton-etn-stock-moves-1-214503727.html
+    source_role: SELL_SIDE_CONSENSUS
+    event_time: "2026-09-22T21:45:00+00:00"
+    available_at: "2026-09-22T21:45:00+00:00"
+    variable_id: ETN_FY2026_ADJUSTED_EPS
+    value: 13.54
+    unit: USD/share
+    period: FY2026
+    revision_lineage: "Zacks consensus observed in timestamped 2026-09-22 article"
+    direct_or_inferred: DIRECT
+    notes: "Public timestamped consensus snapshot."
+  - source_id: marketbeat_next_earnings_estimate_20260925
+    url: https://www.marketbeat.com/stocks/NYSE/ETN/
+    source_role: CATALYST_ESTIMATE
+    event_time: "2026-09-25T22:30:00+00:00"
+    available_at: "2026-09-25T22:30:00+00:00"
+    variable_id: ETN_NEXT_EARNINGS
+    value: "estimated 2026-11-03"
+    unit: date
+    period: Q3_2026
+    revision_lineage: "current estimate as observed 2026-09-25"
+    direct_or_inferred: INFERRED
+    notes: "Estimated date, not a company-announced scheduled date; case stores a wider window."
+  - source_id: market_price_20260925
+    url: https://finance.yahoo.com/quote/ETN/
+    source_role: MARKET_DATA
+    event_time: "2026-09-25T20:00:00+00:00"
+    available_at: "2026-09-25T20:00:00+00:00"
+    variable_id: ETN_SHARE_PRICE
+    value: 439.98
+    unit: USD/share
+    period: spot
+    revision_lineage: "current close snapshot"
+    direct_or_inferred: DIRECT
+    notes: "Included only as a PIT market-data source; not used as the market expectation in v0.1."

@@ -1,0 +1,77 @@
+graph_id: DataCenter_Infra_ETN_electrical_v0_1
+theme_id: DataCenter_Infra
+ticker: ETN
+as_of: "2026-09-25T20:00:00+00:00"
+provenance:
+  - config/themes/datacenter_infra.yaml
+  - config/datacenter_seed.example.yaml
+nodes:
+  - {node_id: hyperscaler_ai_datacenter_capex, node_type: WORLD_STATE, label: Hyperscaler AI data-center capex}
+  - {node_id: datacenter_power_demand, node_type: THEME_LAYER_STATE, label: Data-center power demand}
+  - {node_id: electrical_distribution_demand, node_type: THEME_LAYER_STATE, label: Electrical distribution demand}
+  - {node_id: ETN_electrical_americas, node_type: COMPANY_EXPOSURE, label: Eaton Electrical Americas exposure}
+  - {node_id: ETN_FY2026_ADJUSTED_EPS, node_type: COMPANY_KPI, label: Eaton FY2026 adjusted EPS}
+  - {node_id: ETN_next_earnings, node_type: CATALYST, label: Eaton next earnings / guidance update}
+  - {node_id: ETN_share_price, node_type: PRICE_STATE, label: Eaton share price}
+  - {node_id: ETN_market_expectation_FY2026_EPS, node_type: MARKET_EXPECTATION, label: Market expectation for Eaton FY2026 adjusted EPS}
+edges:
+  - edge_id: capex_to_power
+    source_node: hyperscaler_ai_datacenter_capex
+    target_node: datacenter_power_demand
+    edge_type: CAUSES
+    direction: POSITIVE
+    horizon: 12m
+    confidence: 0.60
+    evidence_refs: [industry_primary:capex_power_link]
+    provenance: [industry_primary]
+    status: HYPOTHESIZED
+  - edge_id: power_to_electrical
+    source_node: datacenter_power_demand
+    target_node: electrical_distribution_demand
+    edge_type: CAUSES
+    direction: POSITIVE
+    horizon: 12m
+    confidence: 0.60
+    evidence_refs: [industry_primary:electrical_demand_link]
+    provenance: [industry_primary]
+    status: HYPOTHESIZED
+  - edge_id: electrical_to_etn
+    source_node: electrical_distribution_demand
+    target_node: ETN_electrical_americas
+    edge_type: EXPOSES
+    direction: POSITIVE
+    horizon: 12m
+    confidence: 0.70
+    evidence_refs: [company_primary:ETN_electrical_americas_exposure]
+    provenance: [company_ir]
+    status: SUPPORTED
+  - edge_id: etn_exposure_to_eps
+    source_node: ETN_electrical_americas
+    target_node: ETN_FY2026_ADJUSTED_EPS
+    edge_type: IMPLIES
+    direction: POSITIVE
+    horizon: FY2026
+    confidence: 0.55
+    evidence_refs: [company_primary:ETN_orders_backlog_guidance]
+    provenance: [company_ir]
+    status: HYPOTHESIZED
+  - edge_id: catalyst_reveals_eps
+    source_node: ETN_next_earnings
+    target_node: ETN_FY2026_ADJUSTED_EPS
+    edge_type: REVEALS
+    direction: INFORMATION
+    horizon: next_event
+    confidence: 0.90
+    evidence_refs: [company_primary:ETN_ir_calendar]
+    provenance: [company_ir]
+    status: SUPPORTED
+  - edge_id: price_to_market_expectation
+    source_node: ETN_share_price
+    target_node: ETN_market_expectation_FY2026_EPS
+    edge_type: PRICES
+    direction: IMPLIED
+    horizon: current
+    confidence: 0.40
+    evidence_refs: [market_data:ETN_price]
+    provenance: [market_data]
+    status: HYPOTHESIZED
