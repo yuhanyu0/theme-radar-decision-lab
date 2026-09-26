@@ -19,7 +19,7 @@ class RepricingContext:
 
 
 def _dt(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.fromisoformat(value)
 
 
 def build_repricing_context(
