@@ -1,0 +1,36 @@
+name: Repricing Graph Qualification
+
+on:
+  push:
+    branches:
+      - design/repricing-graph-investment-system
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e '.[dev]'
+      - name: Full regression suite
+        run: pytest -q
+      - name: Repricing slice exact tests
+        run: pytest -q experiments/repricing_graph_v0_1/test_*.py
+      - name: Ruff experimental Python
+        run: ruff check experiments/repricing_graph_v0_1
+      - name: Production tree guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --name-only c5866ad8f09a472cf631a764f911547c05d337d9...HEAD -- src/decision_lab | grep -q .; then
+            echo "Production src/decision_lab changed unexpectedly"
+            git diff --name-only c5866ad8f09a472cf631a764f911547c05d337d9...HEAD -- src/decision_lab
+            exit 1
+          fi
