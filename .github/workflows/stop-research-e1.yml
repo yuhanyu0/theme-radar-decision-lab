@@ -1,0 +1,48 @@
+name: Stop Research E1 Native Pilot
+on:
+  push:
+    branches: [experiment/stop-research-e1-v0-1]
+permissions:
+  contents: read
+jobs:
+  native-e1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install native repository dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Verify original source tree unchanged
+        run: git diff --exit-code c5866ad8f09a472cf631a764f911547c05d337d9 -- src tests schemas pyproject.toml
+      - name: Full original repository regression
+        run: python -m pytest -q
+      - name: E1 instrument contract
+        run: python -m pytest -q experiments/stop_e1/test_e1.py
+      - name: E1 frozen synthetic evaluation
+        run: python experiments/stop_e1/run_e1.py
+      - name: Deterministic rerun
+        run: python experiments/stop_e1/run_e1.py --verify-repeat
+      - name: Publish compact audit outputs to log
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for name in ('summary.json', 'source_identity.json', 'verification.json', 'policy_rows.csv'):
+              p = Path('experiments/stop_e1/results') / name
+              if p.exists():
+                  print('BEGIN_E1_' + name, flush=True)
+                  print(p.read_text(), flush=True)
+                  print('END_E1_' + name, flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stop-research-e1-native-results
+          path: |
+            experiments/stop_e1
+          retention-days: 90
