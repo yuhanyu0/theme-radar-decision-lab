@@ -71,7 +71,7 @@ def _series(n=90, start="2026-09-01", slope=0.001):
 
 def test_evaluation_waits_for_enough_future_sessions():
     decision = _decision()
-    close = _series(n=10, start="2026-09-26")
+    close = _series(n=10, start="2026-09-25")
     record = evaluate_shadow_case(
         decision=decision,
         close=close,
@@ -86,10 +86,10 @@ def test_evaluation_waits_for_enough_future_sessions():
 def test_evaluation_reports_20d_60d_and_multiple_baselines_without_mutation():
     decision = _decision()
     before_hash = decision.case_hash
-    close = _series(n=90, start="2026-09-26", slope=0.002)
-    spy = _series(n=90, start="2026-09-26", slope=0.001)
-    sector = _series(n=90, start="2026-09-26", slope=0.0008)
-    theme = _series(n=90, start="2026-09-26", slope=0.0015)
+    close = _series(n=90, start="2026-09-25", slope=0.002)
+    spy = _series(n=90, start="2026-09-25", slope=0.001)
+    sector = _series(n=90, start="2026-09-25", slope=0.0008)
+    theme = _series(n=90, start="2026-09-25", slope=0.0015)
     record = evaluate_shadow_case(
         decision=decision,
         close=close,
