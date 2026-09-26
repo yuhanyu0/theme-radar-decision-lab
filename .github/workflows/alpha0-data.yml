@@ -1,0 +1,81 @@
+name: ALPHA0 data preflight
+on:
+  push:
+    branches: [experiment/alpha0-etf-v0-1]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Dependencies
+        run: python -m pip install -e '.[dev]' yfinance==0.2.66
+      - name: Original regression
+        run: |
+          mkdir -p alpha0_return/logs
+          python -m pytest -q | tee alpha0_return/logs/original_tests.log
+      - name: Fixed data request
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from datetime import datetime, timezone
+          import hashlib,json,os,time,traceback
+          import numpy as np
+          import yfinance as yf
+          root=Path('alpha0_return'); data=root/'data';data.mkdir(exist_ok=True)
+          spec={'purpose':'personal investment-system historical price-signal screening, no trading',
+           'protocol_sha256':'407f12f2bf3671fae6dd4bf4a6508f922ce0772969f4f40a42814707b10e015b',
+           'symbols':['XLB','XLE','XLF','XLI','XLK','XLP','XLU','XLV','XLY','SPY'],
+           'start':'2009-01-01','end_exclusive':'2026-01-01',
+           'provider':'Yahoo via yfinance','yfinance_version':yf.__version__,
+           'auto_adjust':False,'actions':True,'repair':False,
+           'base':'c5866ad8f09a472cf631a764f911547c05d337d9',
+           'downloaded_at':datetime.now(timezone.utc).isoformat(),
+           'run_id':os.environ['GITHUB_RUN_ID'],'data_is_vintage':False}
+          (root/'DATA_REQUEST.json').write_text(json.dumps(spec,indent=2))
+          reports=[]; failures=[]
+          for symbol in spec['symbols']:
+              frame=None; last_error=''
+              for attempt in range(3):
+                  try:
+                      frame=yf.Ticker(symbol).history(start=spec['start'],end=spec['end_exclusive'],interval='1d',auto_adjust=False,actions=True,repair=False,raise_errors=True)
+                      if frame.empty or len(frame)<4000: raise ValueError('missing or short data panel')
+                      needed=['Open','High','Low','Close','Adj Close','Volume']
+                      if not all(c in frame for c in needed): raise ValueError('missing mandatory column')
+                      if not np.isfinite(frame[needed].to_numpy(float)).all(): raise ValueError('nonfinite bars')
+                      if (frame[needed[:5]]<=0).any().any() or (frame['Volume']<=0).any():raise ValueError('nonpositive bars')
+                      frame.index=frame.index.tz_convert('America/New_York').tz_localize(None).normalize()
+                      if frame.index.duplicated().any():raise ValueError('duplicate session')
+                      break
+                  except Exception as exc:
+                      last_error=repr(exc);frame=None;time.sleep(2*(attempt+1))
+              if frame is None:
+                  failures.append({'symbol':symbol,'error':last_error}); print('FAILED',symbol,last_error,flush=True);continue
+              path=data/(symbol+'.csv');frame.to_csv(path,index_label='Date')
+              reports.append({'symbol':symbol,'rows':len(frame),'first':str(frame.index[0].date()),'last':str(frame.index[-1].date()),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'columns':list(frame.columns)})
+              print('DOWNLOADED',symbol,len(frame),flush=True)
+          report={'status':'DATA_DOWNLOADED_NOT_YET_ALPHA_TESTED' if not failures else 'DATA_BLOCKED','files':reports,'failures':failures}
+          (root/'DATA_REPORT.json').write_text(json.dumps(report,indent=2))
+          if failures: raise RuntimeError('DATA_BLOCKED: no performance result is authorized')
+          PY
+      - name: Native source bundle
+        if: always()
+        run: |
+          git diff --exit-code c5866ad8f09a472cf631a764f911547c05d337d9 -- src tests schemas pyproject.toml
+          git bundle create alpha0_return/repository.bundle HEAD
+          python -m pip freeze > alpha0_return/ENVIRONMENT.txt
+          cp .github/workflows/alpha0-data.yml alpha0_return/collector_workflow.yml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ALPHA0_DATA_NATIVE
+          path: alpha0_return
+          retention-days: 7
