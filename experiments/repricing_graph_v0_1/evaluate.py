@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 
 import pandas as pd
 
@@ -43,6 +44,19 @@ def evaluate_shadow_case(
     sector_close: pd.Series | None = None,
     theme_control_close: pd.Series | None = None,
 ) -> ShadowOutcomeRecord:
+    # Native outcomes use ordinal future rows. Reject unequal calendars before
+    # delegation so a 20th target session never compares to a 21st benchmark one.
+    for name, series in (("close", close), ("SPY", spy_close),
+                         ("SECTOR", sector_close), ("THEME_CONTROL", theme_control_close)):
+        if series is None:
+            continue
+        if (not isinstance(series.index, pd.DatetimeIndex) or series.index.has_duplicates
+                or not series.index.is_monotonic_increasing):
+            raise ValueError(name + " session index must be unique and increasing")
+        if not all(isfinite(v) and v > 0 for v in series):
+            raise ValueError(name + " prices must be finite and positive")
+        if not series.index.equals(close.index):
+            raise ValueError(name + " session calendar differs from target")
     horizons = (20, 60)
     outcomes: dict[str, dict[str, dict | None]] = {
         "ABSOLUTE": evaluate_forward_outcomes(
@@ -107,4 +121,11 @@ def central_ablation_kill_signal(
     no_gap_metric: float,
     tolerance: float = 0.0,
 ) -> bool:
+    """Descriptive comparison only; no single-case alpha/architecture decision.
+
+    The caller must independently establish adequate cohort size, costs and
+    uncertainty. Equality of metadata or one case cannot kill an architecture.
+    """
+    if not all(isfinite(v) for v in (full_metric, no_gap_metric, tolerance)) or tolerance < 0:
+        raise ValueError("metrics must be finite and tolerance non-negative")
     return no_gap_metric >= full_metric - tolerance

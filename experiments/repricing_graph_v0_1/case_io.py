@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from decision_lab.ledger import canonical_hash
 from decision_lab.themes import ThemePackage
 
 from .model import (
+    CatalystRecord,
     EstimateKind,
+    KeyUnknown,
     MarketExpectation,
     MarketExpectationMethod,
     RealityEstimate,
     RealityEstimateMethod,
     RepricingCase,
     ScenarioReturn,
+    SourceRecord,
     validate_repricing_case,
 )
 
@@ -50,6 +55,12 @@ def _require_source_rows(payload: dict[str, Any], case_as_of: str) -> dict[str, 
     return out
 
 
+def _bool(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError("boolean fields require bool, not a string or number")
+    return value
+
+
 def _estimate(payload: dict[str, Any]) -> RealityEstimate:
     return RealityEstimate(
         variable_id=str(payload["variable_id"]),
@@ -62,9 +73,9 @@ def _estimate(payload: dict[str, Any]) -> RealityEstimate:
         unit=str(payload["unit"]),
         period=str(payload["period"]),
         horizon=str(payload["horizon"]),
-        confidence=float(payload["confidence"]),
+        confidence=None if payload.get("confidence") is None else float(payload["confidence"]),
         evidence_refs=tuple(str(x) for x in payload["evidence_refs"]),
-        probability_is_calibrated=bool(payload["probability_is_calibrated"]),
+        probability_is_calibrated=_bool(payload["probability_is_calibrated"]),
         derivation_method=RealityEstimateMethod(
             str(payload.get("derivation_method", "UNSPECIFIED"))
         ),
@@ -101,13 +112,14 @@ def _market(payload: dict[str, Any], sources: dict[str, dict[str, Any]]) -> Mark
         unit=str(payload["unit"]),
         period=str(payload["period"]),
         horizon=str(payload["horizon"]),
-        confidence=float(payload["confidence"]),
+        confidence=None if payload.get("confidence") is None else float(payload["confidence"]),
         evidence_refs=tuple(str(x) for x in payload["evidence_refs"]),
-        probability_is_calibrated=bool(payload["probability_is_calibrated"]),
+        probability_is_calibrated=_bool(payload["probability_is_calibrated"]),
         method=method,
         inference_method=str(payload["inference_method"]),
         direct_vs_implied=str(payload["direct_vs_implied"]),
         staleness_days=float(payload["staleness_days"]),
+        valuation_assumptions_json=json.dumps(payload.get("valuation_assumptions", {}), sort_keys=True, allow_nan=False),
     )
 
 
@@ -122,6 +134,8 @@ def _validate_catalysts(payload: dict[str, Any], sources: dict[str, dict[str, An
             raise ValueError("catalyst provenance is incomplete")
         if _time(str(known_at)) > cutoff:
             raise ValueError("catalyst was not knowable at case as_of")
+        if _time(str(known_at)) < _time(str(sources[source_ref]["available_at"])):
+            raise ValueError("catalyst predates source availability")
         refs.append(catalyst_id)
     return tuple(refs)
 
@@ -133,9 +147,26 @@ def load_shadow_case(path: str | Path) -> RepricingCase:
     case_data = payload["case"]
     case_as_of = str(case_data["as_of"])
     sources = _require_source_rows(payload, case_as_of)
-    ours = _estimate(payload["our_expectation"])
-    market = _market(payload["market_expectation"], sources)
+    ours = _estimate(payload["our_expectation"]) if payload.get("our_expectation") else None
+    market = _market(payload["market_expectation"], sources) if payload.get("market_expectation") else None
+    for estimate in (ours, market):
+        if estimate is None:
+            continue
+        for ref in estimate.evidence_refs:
+            if ref not in sources:
+                raise ValueError("expectation evidence ref missing from source registry")
+            if _time(estimate.available_at) < _time(sources[ref]["available_at"]):
+                raise ValueError("estimate predates source availability")
     catalyst_refs = _validate_catalysts(payload, sources, case_as_of)
+    if len(set(catalyst_refs)) != len(catalyst_refs):
+        raise ValueError("duplicate catalyst")
+    catalysts = tuple(CatalystRecord(
+        catalyst_id=str(row["catalyst_id"]), event_type=str(row["event_type"]),
+        expected_date_or_window=str(row["expected_date_or_window"]), known_at=str(row["known_at"]),
+        target_node_ids=tuple(row["target_node_ids"]), expected_information=str(row["expected_information"]),
+        observability=str(row["observability"]), thesis_relevance=str(row["thesis_relevance"]),
+        source_ref=str(row["source_ref"]), status=str(row["status"]),
+    ) for row in payload.get("catalysts", []))
     scenarios = tuple(
         ScenarioReturn(
             name=str(row["name"]),
@@ -144,7 +175,7 @@ def load_shadow_case(path: str | Path) -> RepricingCase:
             horizon=str(row["horizon"]),
             condition=str(row["condition"]),
             evidence_refs=tuple(str(x) for x in row["evidence_refs"]),
-            probability_is_calibrated=bool(row["probability_is_calibrated"]),
+            probability_is_calibrated=_bool(row["probability_is_calibrated"]),
         )
         for row in payload.get("scenarios", [])
     )
@@ -165,9 +196,18 @@ def load_shadow_case(path: str | Path) -> RepricingCase:
         thesis=str(case_data.get("thesis", "")),
         strongest_counter_thesis=str(case_data.get("strongest_counter_thesis", "")),
         invalidation_conditions=tuple(str(x) for x in case_data.get("invalidation_conditions", [])),
-        key_unknowns=(),
+        key_unknowns=tuple(KeyUnknown(
+            unknown_id=str(r["unknown_id"]), affected_graph_nodes=tuple(r["affected_graph_nodes"]),
+            current_range=tuple(r["current_range"]) if r.get("current_range") else None,
+            decision_sensitivity=str(r["decision_sensitivity"]),
+            candidate_research_actions=tuple(r["candidate_research_actions"]),
+            estimated_research_cost=str(r["estimated_research_cost"]), status=str(r["status"]),
+        ) for r in payload.get("key_unknowns", [])),
         status=str(case_data.get("status", "DISCOVERY")),
         provenance=tuple(sources),
+        sources=tuple(SourceRecord(k, json.dumps(v, sort_keys=True, allow_nan=False)) for k, v in sources.items()),
+        catalysts=catalysts,
+        input_payload_hash=canonical_hash(payload),
     )
     validate_point_in_time_case(case)
     return case
@@ -175,12 +215,10 @@ def load_shadow_case(path: str | Path) -> RepricingCase:
 
 def validate_point_in_time_case(case: RepricingCase) -> None:
     validate_repricing_case(case)
-    if case.our_expectation is None or case.market_expectation is None:
-        raise ValueError("shadow case requires both expectation sides")
     cutoff = _time(case.as_of)
-    if _time(case.our_expectation.available_at) > cutoff:
+    if case.our_expectation and _time(case.our_expectation.available_at) > cutoff:
         raise ValueError("our expectation exceeds case as_of")
-    if _time(case.market_expectation.available_at) > cutoff:
+    if case.market_expectation and _time(case.market_expectation.available_at) > cutoff:
         raise ValueError("market expectation exceeds case as_of")
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -81,7 +82,7 @@ class GraphEdge:
     direction: str
     magnitude_or_elasticity_range: tuple[float, float] | None
     horizon: str
-    confidence: float
+    confidence: float | None
     evidence_refs: tuple[str, ...]
     provenance: tuple[str, ...]
     evidence_kinds: tuple[str, ...]
@@ -90,7 +91,7 @@ class GraphEdge:
     def __post_init__(self) -> None:
         if not self.edge_id.strip():
             raise ValueError("edge_id must be non-empty")
-        if not 0.0 <= float(self.confidence) <= 1.0:
+        if self.confidence is not None and not 0.0 <= float(self.confidence) <= 1.0:
             raise ValueError("edge confidence must be in [0,1]")
 
 
@@ -106,12 +107,19 @@ class RealityEstimate:
     unit: str
     period: str
     horizon: str
-    confidence: float
+    confidence: float | None
     evidence_refs: tuple[str, ...]
     probability_is_calibrated: bool
     derivation_method: RealityEstimateMethod = RealityEstimateMethod.UNSPECIFIED
 
     def __post_init__(self) -> None:
+        if not isinstance(self.kind, EstimateKind):
+            raise TypeError("estimate kind must be typed")
+        if not isinstance(self.probability_is_calibrated, bool):
+            raise TypeError("calibration flag must be bool")
+        for number in (self.value, self.low, self.high):
+            if number is not None and (isinstance(number, bool) or not isfinite(number)):
+                raise ValueError("estimate values must be finite numbers")
         if _parse_time(self.available_at) > _parse_time(self.as_of):
             raise ValueError("available_at exceeds as_of")
         if self.kind is EstimateKind.POINT:
@@ -127,7 +135,7 @@ class RealityEstimate:
             )
         ):
             raise ValueError("interval estimate requires ordered low/high")
-        if not 0.0 <= float(self.confidence) <= 1.0:
+        if self.confidence is not None and not 0.0 <= float(self.confidence) <= 1.0:
             raise ValueError("confidence must be in [0,1]")
         _nonempty(self.evidence_refs, "evidence_refs")
 
@@ -144,13 +152,14 @@ class MarketExpectation:
     unit: str
     period: str
     horizon: str
-    confidence: float
+    confidence: float | None
     evidence_refs: tuple[str, ...]
     probability_is_calibrated: bool
     method: MarketExpectationMethod
     inference_method: str
     direct_vs_implied: str
     staleness_days: float
+    valuation_assumptions_json: str = "{}"
 
     def __post_init__(self) -> None:
         RealityEstimate(
@@ -168,6 +177,9 @@ class MarketExpectation:
             evidence_refs=self.evidence_refs,
             probability_is_calibrated=self.probability_is_calibrated,
         )
+        if not isinstance(self.method, MarketExpectationMethod):
+            raise TypeError("market expectation method must be typed")
+        json.loads(self.valuation_assumptions_json)
         if self.staleness_days < 0 or not isfinite(self.staleness_days):
             raise ValueError("staleness_days must be finite and non-negative")
         if not self.inference_method.strip():
@@ -230,6 +242,18 @@ class RepricingGraph:
 
 
 @dataclass(frozen=True)
+class SourceRecord:
+    """Exact source-row semantics; does not certify the source's truth."""
+    source_id: str
+    payload_json: str
+
+    def __post_init__(self) -> None:
+        payload = json.loads(self.payload_json)
+        if payload.get("source_id") != self.source_id:
+            raise ValueError("source id does not match frozen payload")
+
+
+@dataclass(frozen=True)
 class RepricingCase:
     case_id: str
     theme_id: str
@@ -250,6 +274,9 @@ class RepricingCase:
     key_unknowns: tuple[KeyUnknown, ...]
     status: str
     provenance: tuple[str, ...]
+    sources: tuple[SourceRecord, ...] = ()
+    catalysts: tuple[CatalystRecord, ...] = ()
+    input_payload_hash: str = ""
 
 
 def validate_repricing_graph(graph: RepricingGraph) -> None:
@@ -278,6 +305,9 @@ def validate_repricing_case(case: RepricingCase) -> None:
     if not case.case_id.strip() or not case.theme_id.strip() or not case.ticker.strip():
         raise ValueError("case identifiers must be non-empty")
     _parse_time(case.as_of)
+    for estimate in (case.our_expectation, case.market_expectation):
+        if estimate is not None and _parse_time(estimate.as_of) > _parse_time(case.as_of):
+            raise ValueError("estimate as_of exceeds case as_of")
     if case.our_expectation is not None and _parse_time(case.our_expectation.available_at) > _parse_time(case.as_of):
         raise ValueError("our expectation exceeds case as_of")
     if case.market_expectation is not None and _parse_time(case.market_expectation.available_at) > _parse_time(case.as_of):

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -18,6 +19,8 @@ class RepricingContext:
     control_members: tuple[str, ...]
     causal_exposure_validated: bool
     warnings: tuple[str, ...]
+    economic_exposure_evidence_refs: tuple[str, ...] = ()
+    market_input_hash: str | None = None
 
 
 def _time(value: str) -> datetime:
@@ -43,6 +46,20 @@ def build_repricing_context(
     target = target.upper()
     if _time(market_data_available_at) > _time(as_of):
         raise ValueError("market data available after context as_of")
+    cutoff = _time(as_of)
+    for series in (returns, ohlcv, benchmark_close):
+        if not isinstance(series.index, pd.DatetimeIndex) or series.index.has_duplicates:
+            raise ValueError("market data require unique dated rows")
+        if not series.index.is_monotonic_increasing:
+            raise ValueError("market rows must be ordered")
+        for ts in series.index:
+            row_time = ts.to_pydatetime()
+            if row_time.tzinfo is None:
+                row_time = datetime.combine(row_time.date(), time(16), ZoneInfo("America/New_York"))
+            if row_time > cutoff:
+                raise ValueError("future market rows exceed context as_of")
+    if len({m.upper() for m in members}) != len(members):
+        raise ValueError("duplicate control member")
     control_members = tuple(
         ticker.upper()
         for ticker in members
@@ -82,4 +99,11 @@ def build_repricing_context(
         control_members=control_members,
         causal_exposure_validated=causal_exposure_validated,
         warnings=tuple(warnings),
+        economic_exposure_evidence_refs=tuple(economic_exposure_evidence_refs),
+        market_input_hash=_market_hash(returns, ohlcv, benchmark_close),
     )
+
+
+def _market_hash(*objects: pd.DataFrame | pd.Series) -> str:
+    from decision_lab.ledger import canonical_hash
+    return canonical_hash(tuple(obj.to_json(date_format="iso", orient="split") for obj in objects))

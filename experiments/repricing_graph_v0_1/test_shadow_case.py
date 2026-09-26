@@ -3,9 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-import yaml
-
 import pytest
+import yaml
 
 from decision_lab.linkage import LinkageResult
 from decision_lab.tape import TapeAssessment
