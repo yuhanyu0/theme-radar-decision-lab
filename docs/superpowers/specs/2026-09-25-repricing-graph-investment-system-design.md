@@ -481,7 +481,7 @@ Expected alpha must not silently interpret uncalibrated match scores as probabil
 
 Position sizing is downstream of the Repricing Case.
 
-Version 0.1 should use a simple, auditable sizing rule rather than a sophisticated optimizer.
+Version 0.1 should eventually use a simple, auditable sizing rule rather than a sophisticated optimizer. The **first vertical-slice implementation plan does not size capital**; it stops at scenario-based expected-return / downside representation and shadow evaluation.
 
 Inputs:
 
@@ -600,11 +600,13 @@ Scope:
     ONE theme: DataCenter_Infra
     ONE world shock family
     ONE sub-layer
-    5-10 target companies
-    ONE primary KPI per target
+    ONE initial target company in the first implementation
+    ONE primary KPI for that target
     ONE market-expectation variable
     ONE catalyst class
     20d and 60d forward outcomes
+
+After the object/data contract survives one real shadow case without hindsight, the same frozen mechanism may be expanded to a 5-10 company evaluation cohort. The first implementation plan must not begin by building the whole cohort.
 
 Recommended first shock family:
 
